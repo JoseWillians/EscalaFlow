@@ -33,3 +33,6 @@ playwright/.cache/
 # Bloqueio de Markdown interno (apenas README.md permitido no GitHub)
 *.md
 !README.md
+
+.vercel
+.env*

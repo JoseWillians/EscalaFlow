@@ -1,5 +1,11 @@
 import { getTodayIsoDate, getWeekStartMonday } from './dates';
-import type { AppState, Employee, ShiftTemplate, Team } from './schemas';
+import {
+  DEFAULT_SCHEDULE_RULES,
+  type AppState,
+  type Employee,
+  type ShiftTemplate,
+  type Team,
+} from './schemas';
 
 export function createSeedShifts(): ShiftTemplate[] {
   return [
@@ -211,6 +217,7 @@ export function createInitialEmptyState(): AppState {
   return {
     version: 1,
     sundayCompMode: 'same_week',
+    scheduleRules: { ...DEFAULT_SCHEDULE_RULES },
     teams: [],
     shifts: createSeedShifts(),
     employees: [],
@@ -226,6 +233,7 @@ export function createSampleState(referenceDate: string = getTodayIsoDate()): Ap
   return {
     version: 1,
     sundayCompMode: 'same_week',
+    scheduleRules: { ...DEFAULT_SCHEDULE_RULES },
     teams: createSampleTeams(),
     shifts: createSeedShifts(),
     employees: createSampleEmployees(),

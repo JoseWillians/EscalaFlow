@@ -12,7 +12,7 @@ import {
   type DragStartEvent,
 } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
-import { AlertTriangle, Layers, Lock, Unlock } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronRight, Layers, Lock, Unlock } from 'lucide-react';
 import { formatShortDateBr, getWeekDays, getWeekdayShortPt } from '@/domain/dates';
 import {
   UNAVAILABILITY_LABELS,
@@ -24,6 +24,7 @@ import {
 } from '@/domain/schemas';
 import { getApplicableShiftsForDate, type ScheduleIssue } from '@/engine/validator';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { CellEditPopover } from './CellEditPopover';
 
 export interface GridByEmployeeProps {
@@ -250,6 +251,19 @@ export function GridByEmployee({
   }, [state.teams, state.employees, teamIdFilter]);
 
   const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [collapsedTeams, setCollapsedTeams] = useState<Record<string, boolean>>({});
+
+  const toggleSection = (teamId: string) => {
+    setCollapsedTeams((prev) => ({ ...prev, [teamId]: !prev[teamId] }));
+  };
+
+  const setAllExpanded = (expanded: boolean) => {
+    const next: Record<string, boolean> = {};
+    for (const sec of teamSections) {
+      next[sec.id] = !expanded;
+    }
+    setCollapsedTeams(next);
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -307,22 +321,48 @@ export function GridByEmployee({
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="space-y-4">
-        {teamSections.map((section) => (
+        {teamSections.length > 1 && (
+          <div className="flex items-center justify-end gap-2">
+            <Button tone="outline" size="sm" onClick={() => setAllExpanded(true)}>
+              Expandir todas
+            </Button>
+            <Button tone="outline" size="sm" onClick={() => setAllExpanded(false)}>
+              Recolher todas
+            </Button>
+          </div>
+        )}
+        {teamSections.map((section) => {
+          const isExpanded = !collapsedTeams[section.id];
+          return (
           <section
             key={section.id}
             className="overflow-hidden rounded-lg border border-slate-200 bg-white"
             data-testid={`grid-team-${section.id}`}
           >
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-3.5 py-2">
+            <button
+              type="button"
+              onClick={() => toggleSection(section.id)}
+              aria-expanded={isExpanded}
+              data-testid={`toggle-grid-collapse-${section.id}`}
+              className={`flex w-full items-center justify-between bg-slate-50 px-3.5 py-2 text-left transition-colors hover:bg-slate-100/70 ${
+                isExpanded ? 'border-b border-slate-200' : ''
+              }`}
+            >
               <div className="flex items-center gap-2">
+                {isExpanded ? (
+                  <ChevronDown className="h-4 w-4 text-slate-600" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-slate-600" />
+                )}
                 <Layers className="h-4 w-4 text-blue-600" />
                 <h3 className="text-sm font-semibold text-slate-900">{section.name}</h3>
               </div>
               <span className="font-mono text-xs text-slate-500">
                 {section.employees.length} colaborador(es)
               </span>
-            </div>
+            </button>
 
+            {isExpanded && (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[880px] border-collapse text-left">
                 <thead>
@@ -392,8 +432,10 @@ export function GridByEmployee({
                 </tbody>
               </table>
             </div>
+            )}
           </section>
-        ))}
+          );
+        })}
       </div>
 
       <DragOverlay>

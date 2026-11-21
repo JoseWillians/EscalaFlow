@@ -7,7 +7,7 @@ test.describe('EscalaFlow — Fluxos Críticos', () => {
     });
   });
 
-  test('cria equipe, cadastra colaborador iniciante na sessão, gera escala por equipe (2 no domingo, sem folga indevida seg-sáb), valida troca e gera exportações', async ({
+  test('favicon/logo, recolhimento de equipe, regras e turnos configuráveis, validação de troca e exportação por equipe selecionada', async ({
     page,
   }) => {
     const pageErrors: string[] = [];
@@ -15,8 +15,9 @@ test.describe('EscalaFlow — Fluxos Críticos', () => {
 
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'EscalaFlow' })).toBeVisible();
+    await expect(page.locator('link[rel="icon"]')).toHaveAttribute('href', /favicon\.svg$/);
 
-    // 1. Cria equipe e cadastra colaborador com tag Iniciante na sessão da equipe
+    // 1. Cria equipe e cadastra colaborador com tag Iniciante na sessão da equipe + testa recolhimento
     await page.getByRole('tab', { name: /Equipes/i }).click();
     await page.getByLabel('Nome da equipe').fill('Equipe Comercial');
     await page.getByLabel('Descrição (opcional)').fill('Vendas e pós-venda');
@@ -39,13 +40,28 @@ test.describe('EscalaFlow — Fluxos Críticos', () => {
     ).toBeVisible();
     await expect(page.getByText('Veterano')).toHaveCount(0);
 
-    // 2. Carrega dados de exemplo (2 equipes separadas) e gera escala automática
+    // Recolhe e reexpande a seção da equipe
+    const collapseTeamBtn = teamSection.locator('button[aria-expanded]');
+    await collapseTeamBtn.click();
+    await expect(collapseTeamBtn).toHaveAttribute('aria-expanded', 'false');
+    await expect(teamSection.getByText('Eduardo Novato')).toHaveCount(0);
+    await collapseTeamBtn.click();
+    await expect(collapseTeamBtn).toHaveAttribute('aria-expanded', 'true');
+
+    // 2. Carrega dados de exemplo (2 equipes separadas) e verifica grade + recolhimento
     await page.getByRole('tab', { name: /Grade Semanal/i }).click();
     await page.getByTestId('load-sample-btn').click();
 
     await expect(page.getByTestId('grid-team-team-atendimento')).toBeVisible();
     await expect(page.getByTestId('grid-team-team-suporte')).toBeVisible();
     await expect(page.getByTestId('equity-panel')).toBeVisible();
+
+    await page.getByTestId('toggle-grid-collapse-team-atendimento').click();
+    await expect(page.getByTestId('toggle-grid-collapse-team-atendimento')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    await page.getByTestId('toggle-grid-collapse-team-atendimento').click();
 
     // Verifica que na Equipe Atendimento há 2 pessoas no domingo (08:00 às 18:00)
     const atendimentoSundayCells = page
@@ -63,11 +79,17 @@ test.describe('EscalaFlow — Fluxos Críticos', () => {
       await expect(julianaRow.locator('td').nth(colIdx)).not.toContainText('Folga');
     }
 
-    // Regera escala explicitamente
+    // 3. Abre painel Regras e Turnos, altera quantidade de domingo para 3, gera e restaura para 2
+    await page.getByTestId('toggle-rules-panel-btn').click();
+    await expect(page.getByTestId('schedule-rules-panel')).toBeVisible();
+    await page.getByTestId('sunday-staff-count-input').fill('3');
     await page.getByTestId('generate-schedule-btn').click();
-    await expect(page.getByText(/Escala semanal gerada/i)).toBeVisible();
+    await expect(atendimentoSundayCells.filter({ hasText: '08:00 às 18:00 (Dom)' })).toHaveCount(3);
+    await page.getByTestId('reset-rules-btn').click();
+    await page.getByTestId('generate-schedule-btn').click();
+    await expect(atendimentoSundayCells.filter({ hasText: '08:00 às 18:00 (Dom)' })).toHaveCount(2);
 
-    // 3. Troca de turno via modal com validação em tempo real + confirmação de exceção + histórico
+    // 4. Troca de turno via modal com validação em tempo real + confirmação de exceção + histórico
     await page.getByTestId('open-swap-modal-btn').click();
     await expect(page.getByRole('dialog')).toBeVisible();
 
@@ -104,23 +126,28 @@ test.describe('EscalaFlow — Fluxos Críticos', () => {
       'Cobertura emergencial autorizada',
     );
 
-    // 4. Central de Exportação: WhatsApp, Excel (.xlsx) e PNG
+    // 5. Central de Exportação: somente a equipe selecionada (WhatsApp, Excel .xlsx e PNG)
     await page.getByRole('tab', { name: /Exportar/i }).click();
+    await page.getByTestId('export-team-select').selectOption('team-atendimento');
     const whatsappBox = page.getByTestId('whatsapp-textarea');
     await expect(whatsappBox).toContainText('*[Equipe Atendimento]*');
-    await expect(whatsappBox).toContainText('*[Equipe Suporte]*');
+    await expect(whatsappBox).not.toContainText('*[Equipe Suporte]*');
 
     const [xlsxDownload] = await Promise.all([
       page.waitForEvent('download'),
       page.getByTestId('export-xlsx-btn').click(),
     ]);
-    expect(xlsxDownload.suggestedFilename()).toMatch(/^escala-\d{4}-\d{2}-\d{2}\.xlsx$/);
+    expect(xlsxDownload.suggestedFilename()).toMatch(
+      /^escala-equipe-atendimento-\d{4}-\d{2}-\d{2}\.xlsx$/,
+    );
 
     const [pngDownload] = await Promise.all([
       page.waitForEvent('download'),
       page.getByTestId('export-png-btn').click(),
     ]);
-    expect(pngDownload.suggestedFilename()).toMatch(/^escala-\d{4}-\d{2}-\d{2}\.png$/);
+    expect(pngDownload.suggestedFilename()).toMatch(
+      /^escala-equipe-atendimento-\d{4}-\d{2}-\d{2}\.png$/,
+    );
 
     await page.setViewportSize({ width: 375, height: 812 });
     await page.getByRole('tab', { name: /Grade Semanal/i }).click();

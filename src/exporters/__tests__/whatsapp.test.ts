@@ -45,4 +45,22 @@ describe('generateWhatsAppText', () => {
     expect(text).toContain('*Camila Ferreira*');
     expect(text).toContain('Folga (Dom.)');
   });
+
+  it('exporta apenas a equipe selecionada quando teamIdFilter é informado', () => {
+    const state = createSampleState('2026-11-09');
+    const week = generateWeekSchedule({ state, weekStart: '2026-11-09' });
+    state.weeks['2026-11-09'] = week;
+
+    const text = generateWhatsAppText({
+      state,
+      weekStart: '2026-11-09',
+      groupBy: 'employee',
+      teamIdFilter: 'team-atendimento',
+    });
+
+    expect(text).toContain('*[Equipe Atendimento]*');
+    expect(text).toContain('*Camila Ferreira*');
+    expect(text).not.toContain('*[Equipe Suporte]*');
+    expect(text).not.toContain('Rafael Mendes');
+  });
 });

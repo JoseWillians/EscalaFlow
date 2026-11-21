@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { getWeekDays } from '@/domain/dates';
 import { createSampleState, createSeedShifts } from '@/domain/seed';
-import type { AppState } from '@/domain/schemas';
+import { DEFAULT_SCHEDULE_RULES, type AppState } from '@/domain/schemas';
 import { generateWeekSchedule } from '../scheduler';
 import { validateWeekSchedule } from '../validator';
 
@@ -119,6 +119,7 @@ describe('generateWeekSchedule', () => {
     const state: AppState = {
       version: 1,
       sundayCompMode: 'same_week',
+      scheduleRules: { ...DEFAULT_SCHEDULE_RULES },
       teams: [{ id: 'team-1', name: 'Equipe Principal', active: true }],
       shifts: createSeedShifts(),
       employees: [
@@ -233,5 +234,48 @@ describe('generateWeekSchedule', () => {
     expect(run1).toEqual(run2);
     const issues = validateWeekSchedule({ state, weekStart: '2026-11-09', week: run1 });
     expect(issues.filter((i) => i.code === 'INTERJORNADA')).toHaveLength(0);
+  });
+
+  it('permite configurar quantidade de pessoas no domingo (0 ou 3), turnos escolhidos e desativar regras via caixas de seleção', () => {
+    const state = createSampleState('2026-11-09');
+    state.scheduleRules = {
+      enforceBeginnerRestrictions: false,
+      enforceSundayCompOff: false,
+      noMidweekOffWithoutSunday: false,
+      enforceNightShiftMonthlyRotation: false,
+      avoidConsecutiveSundays: false,
+      warnInterjornadaUnder11h: false,
+      sundayStaffCount: 3,
+      selectedShiftIdsForGeneration: ['shift-wk-08-18', 'shift-sat-08-12', 'shift-sun-08-18'],
+    };
+
+    const week = generateWeekSchedule({ state, weekStart: '2026-11-09' });
+    const days = getWeekDays('2026-11-09');
+    const sundayDate = days[6];
+
+    // 3 pessoas no domingo por equipe
+    for (const team of state.teams) {
+      const teamEmployees = state.employees.filter((e) => e.teamId === team.id);
+      const sundayWorkers = teamEmployees.filter(
+        (e) => week.assignments[e.id]?.[sundayDate]?.kind === 'SHIFT',
+      );
+      expect(sundayWorkers).toHaveLength(3);
+    }
+
+    // Como enforceSundayCompOff=false e noMidweekOffWithoutSunday=false,
+    // ninguém recebe COMP_OFF automático e turnos não selecionados não aparecem
+    for (const emp of state.employees) {
+      for (const date of days) {
+        const cell = week.assignments[emp.id]?.[date];
+        expect(cell?.kind).not.toBe('COMP_OFF');
+        if (cell?.kind === 'SHIFT') {
+          expect(state.scheduleRules.selectedShiftIdsForGeneration).toContain(cell.shiftId);
+        }
+      }
+    }
+
+    // Validador respeita regras desativadas
+    const issues = validateWeekSchedule({ state, weekStart: '2026-11-09', week });
+    expect(issues.filter((i) => i.severity !== 'info')).toHaveLength(0);
   });
 });

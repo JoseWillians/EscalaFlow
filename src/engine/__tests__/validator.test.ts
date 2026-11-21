@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { createSeedShifts } from '@/domain/seed';
-import type { AppState, WeekSchedule } from '@/domain/schemas';
+import { DEFAULT_SCHEDULE_RULES, type AppState, type WeekSchedule } from '@/domain/schemas';
 import { hasInterjornadaViolation, validateSwap, validateWeekSchedule } from '../validator';
 
 function makeState(): AppState {
   return {
     version: 1,
     sundayCompMode: 'same_week',
+    scheduleRules: { ...DEFAULT_SCHEDULE_RULES },
     teams: [{ id: 'team-1', name: 'Atendimento', active: true }],
     shifts: createSeedShifts(),
     employees: [

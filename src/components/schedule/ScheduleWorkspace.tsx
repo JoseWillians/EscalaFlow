@@ -7,6 +7,7 @@ import {
   History,
   LayoutGrid,
   List,
+  SlidersHorizontal,
   Wand2,
 } from 'lucide-react';
 import {
@@ -17,11 +18,12 @@ import {
 import type {
   AppState,
   CellAssignment,
+  ScheduleRules,
   SwapRecord,
   WeekSchedule,
 } from '@/domain/schemas';
 import { computeMonthlyEquity } from '@/engine/equity';
-import { validateSwap, validateWeekSchedule } from '@/engine/validator';
+import { getScheduleRules, validateSwap, validateWeekSchedule } from '@/engine/validator';
 import { describeCellForText } from '@/exporters/whatsapp';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -29,6 +31,7 @@ import { SelectInput } from '@/components/ui/form-controls';
 import { EquityPanel } from './EquityPanel';
 import { GridByEmployee } from './GridByEmployee';
 import { GridByShift } from './GridByShift';
+import { ScheduleRulesPanel } from './ScheduleRulesPanel';
 import { SwapModal } from './SwapModal';
 
 export interface ScheduleWorkspaceProps {
@@ -39,6 +42,7 @@ export interface ScheduleWorkspaceProps {
   onClearUnlocked: () => void;
   onLoadSampleData: () => void;
   onUpdateWeek: (nextWeek: WeekSchedule) => void;
+  onUpdateScheduleRules: (rules: ScheduleRules) => void;
 }
 
 export function ScheduleWorkspace({
@@ -49,9 +53,11 @@ export function ScheduleWorkspace({
   onClearUnlocked,
   onLoadSampleData,
   onUpdateWeek,
+  onUpdateScheduleRules,
 }: ScheduleWorkspaceProps) {
   const [viewMode, setViewMode] = useState<'employee' | 'shift'>('employee');
   const [teamFilter, setTeamFilter] = useState<string>('all');
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [swapOpen, setSwapOpen] = useState(false);
   const [swapInitial, setSwapInitial] = useState<{
     employeeIdA: string;
@@ -226,6 +232,15 @@ export function ScheduleWorkspace({
             <ArrowLeftRight className="h-4 w-4" />
             <span>Trocar Turno</span>
           </Button>
+          <Button
+            tone={rulesOpen ? 'secondary' : 'outline'}
+            onClick={() => setRulesOpen((prev) => !prev)}
+            aria-expanded={rulesOpen}
+            data-testid="toggle-rules-panel-btn"
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            <span>Regras e Turnos</span>
+          </Button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -278,6 +293,14 @@ export function ScheduleWorkspace({
           </div>
         </div>
       </div>
+
+      {rulesOpen && (
+        <ScheduleRulesPanel
+          rules={getScheduleRules(state)}
+          shifts={state.shifts}
+          onChange={onUpdateScheduleRules}
+        />
+      )}
 
       {swapFeedback && (
         <div

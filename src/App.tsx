@@ -4,6 +4,7 @@ import type {
   AppState,
   Employee,
   Holiday,
+  ScheduleRules,
   ShiftTemplate,
   SundayCompMode,
   Team,
@@ -135,6 +136,10 @@ export function App() {
     setState((prev) => ({ ...prev, holidays }));
   };
 
+  const handleUpdateScheduleRules = (scheduleRules: ScheduleRules) => {
+    setState((prev) => ({ ...prev, scheduleRules }));
+  };
+
   const handleExportBackup = () => {
     const json = exportBackupJson(state);
     const blob = new Blob([json], { type: 'application/json' });
@@ -194,6 +199,7 @@ export function App() {
           onClearUnlocked={handleClearUnlocked}
           onLoadSampleData={handleLoadSampleData}
           onUpdateWeek={updateCurrentWeek}
+          onUpdateScheduleRules={handleUpdateScheduleRules}
         />
       </TabPanel>
 

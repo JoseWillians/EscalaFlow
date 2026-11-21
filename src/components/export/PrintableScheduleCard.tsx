@@ -14,6 +14,7 @@ import {
   type ShiftTemplate,
   type WeekSchedule,
 } from '@/domain/schemas';
+import { EscalaFlowLogo } from '@/components/layout/EscalaFlowLogo';
 
 export interface PrintableScheduleCardProps {
   state: AppState;
@@ -116,16 +117,19 @@ export const PrintableScheduleCard = forwardRef<HTMLDivElement, PrintableSchedul
         data-testid="printable-schedule-card"
       >
         <div className="flex items-start justify-between border-b border-slate-200 pb-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">
-              EscalaFlow · Escala Semanal
-            </p>
-            <h3 className="mt-1 text-xl font-bold text-slate-950">
-              Semana de {formatWeekRangeBr(weekStart)}
-            </h3>
-            <p className="mt-0.5 text-sm text-slate-600">
-              {formatMonthYearPt(getWeekReferenceMonthKey(weekStart))}
-            </p>
+          <div className="flex items-start gap-3">
+            <EscalaFlowLogo className="h-10 w-10 shrink-0" />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-blue-700">
+                EscalaFlow · {sections[0]?.name ?? 'Escala Semanal'}
+              </p>
+              <h3 className="mt-1 text-xl font-bold text-slate-950">
+                Semana de {formatWeekRangeBr(weekStart)}
+              </h3>
+              <p className="mt-0.5 text-sm text-slate-600">
+                {formatMonthYearPt(getWeekReferenceMonthKey(weekStart))}
+              </p>
+            </div>
           </div>
           {holidays.length > 0 && (
             <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-900">

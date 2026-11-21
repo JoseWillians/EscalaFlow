@@ -7,10 +7,12 @@ import {
   timeToMinutes,
 } from '@/domain/dates';
 import {
+  DEFAULT_SCHEDULE_RULES,
   UNAVAILABILITY_LABELS,
   type AppState,
   type CellAssignment,
   type Employee,
+  type ScheduleRules,
   type ShiftTemplate,
   type Unavailability,
   type WeekSchedule,
@@ -46,6 +48,10 @@ export interface SwapValidationResult {
   simulatedWeek: WeekSchedule;
 }
 
+export function getScheduleRules(state: AppState): ScheduleRules {
+  return state.scheduleRules ?? DEFAULT_SCHEDULE_RULES;
+}
+
 export function getEmployeeUnavailabilityOnDate(
   state: AppState,
   employeeId: string,
@@ -56,8 +62,18 @@ export function getEmployeeUnavailabilityOnDate(
   );
 }
 
-export function getApplicableShiftsForDate(state: AppState, date: string): ShiftTemplate[] {
-  const activeShifts = state.shifts.filter((s) => s.active);
+export function getApplicableShiftsForDate(
+  state: AppState,
+  date: string,
+  respectSelectedForGeneration = false,
+): ShiftTemplate[] {
+  const rules = getScheduleRules(state);
+  let activeShifts = state.shifts.filter((s) => s.active);
+  if (respectSelectedForGeneration && rules.selectedShiftIdsForGeneration.length > 0) {
+    const selectedSet = new Set(rules.selectedShiftIdsForGeneration);
+    activeShifts = activeShifts.filter((s) => selectedSet.has(s.id));
+  }
+
   const holiday = state.holidays[date];
 
   if (holiday) {
@@ -99,6 +115,7 @@ export function validateWeekSchedule(params: {
   week: WeekSchedule;
 }): ScheduleIssue[] {
   const { state, weekStart, week } = params;
+  const rules = getScheduleRules(state);
   const issues: ScheduleIssue[] = [];
   const days = getWeekDays(weekStart);
   const shiftsById = new Map(state.shifts.map((s) => [s.id, s]));
@@ -122,7 +139,7 @@ export function validateWeekSchedule(params: {
       const holiday = state.holidays[date];
       const isHolidaySpecial = holiday?.mode === 'special';
 
-      if (emp.active && !isSunday && cell.kind === 'OFF') {
+      if (rules.noMidweekOffWithoutSunday && emp.active && !isSunday && cell.kind === 'OFF') {
         issues.push({
           code: 'MIDWEEK_OFF_WITHOUT_SUNDAY',
           severity: 'warning',
@@ -137,7 +154,7 @@ export function validateWeekSchedule(params: {
 
       const shift = cell.shiftId ? shiftsById.get(cell.shiftId) : undefined;
 
-      if (emp.isBeginner) {
+      if (rules.enforceBeginnerRestrictions && emp.isBeginner) {
         if (shift?.isNightShift) {
           issues.push({
             code: 'BEGINNER_NIGHT_SHIFT',
@@ -186,61 +203,65 @@ export function validateWeekSchedule(params: {
         });
       }
 
-      const prevDate = addDays(date, -1);
-      const prevCell =
-        prevDate >= weekStart ? empDays[prevDate] : prevWeek?.assignments[emp.id]?.[prevDate];
-      if (prevCell?.kind === 'SHIFT' && prevCell.shiftId && shift) {
-        const prevShift = shiftsById.get(prevCell.shiftId);
-        if (prevShift) {
-          const { violated, restMinutes } = hasInterjornadaViolation(prevShift, shift);
-          if (violated) {
-            issues.push({
-              code: 'INTERJORNADA',
-              severity: 'warning',
-              employeeId: emp.id,
-              teamId: emp.teamId,
-              date,
-              shiftId: shift.id,
-              message: `Alerta de interjornada para ${emp.name} em ${dateBr}: saída às ${prevShift.endTime} e entrada às ${shift.startTime} (${formatMinutesAsHours(restMinutes)} de descanso, mínimo 11h).`,
-            });
+      if (rules.warnInterjornadaUnder11h) {
+        const prevDate = addDays(date, -1);
+        const prevCell =
+          prevDate >= weekStart ? empDays[prevDate] : prevWeek?.assignments[emp.id]?.[prevDate];
+        if (prevCell?.kind === 'SHIFT' && prevCell.shiftId && shift) {
+          const prevShift = shiftsById.get(prevCell.shiftId);
+          if (prevShift) {
+            const { violated, restMinutes } = hasInterjornadaViolation(prevShift, shift);
+            if (violated) {
+              issues.push({
+                code: 'INTERJORNADA',
+                severity: 'warning',
+                employeeId: emp.id,
+                teamId: emp.teamId,
+                date,
+                shiftId: shift.id,
+                message: `Alerta de interjornada para ${emp.name} em ${dateBr}: saída às ${prevShift.endTime} e entrada às ${shift.startTime} (${formatMinutesAsHours(restMinutes)} de descanso, mínimo 11h).`,
+              });
+            }
           }
         }
       }
     }
 
-    if (state.sundayCompMode === 'same_week') {
-      const workedSunday = empDays[days[6]]?.kind === 'SHIFT';
-      if (workedSunday) {
-        const hasCompOff = days.slice(0, 6).some((d) => empDays[d]?.kind === 'COMP_OFF');
-        if (!hasCompOff) {
-          issues.push({
-            code: 'MISSING_SUNDAY_COMP_OFF',
-            severity: 'warning',
-            employeeId: emp.id,
-            teamId: emp.teamId,
-            date: days[6],
-            message: `${emp.name} trabalha no Domingo (${formatShortDateBr(days[6])}) e está sem Folga (Dom.) na semana.`,
-          });
+    if (rules.enforceSundayCompOff) {
+      if (state.sundayCompMode === 'same_week') {
+        const workedSunday = empDays[days[6]]?.kind === 'SHIFT';
+        if (workedSunday) {
+          const hasCompOff = days.slice(0, 6).some((d) => empDays[d]?.kind === 'COMP_OFF');
+          if (!hasCompOff) {
+            issues.push({
+              code: 'MISSING_SUNDAY_COMP_OFF',
+              severity: 'warning',
+              employeeId: emp.id,
+              teamId: emp.teamId,
+              date: days[6],
+              message: `${emp.name} trabalha no Domingo (${formatShortDateBr(days[6])}) e está sem Folga (Dom.) na semana.`,
+            });
+          }
         }
-      }
-    } else if (prevWeek) {
-      const prevSunday = addDays(weekStart, -1);
-      const workedPrevSunday = prevWeek.assignments[emp.id]?.[prevSunday]?.kind === 'SHIFT';
-      if (workedPrevSunday) {
-        const prevDays = getWeekDays(prevWeek.weekStart);
-        const alreadyHadInPrev = prevDays
-          .slice(0, 6)
-          .some((d) => prevWeek.assignments[emp.id]?.[d]?.kind === 'COMP_OFF');
-        const hasCompOffNow = days.slice(0, 6).some((d) => empDays[d]?.kind === 'COMP_OFF');
-        if (!alreadyHadInPrev && !hasCompOffNow) {
-          issues.push({
-            code: 'MISSING_SUNDAY_COMP_OFF',
-            severity: 'warning',
-            employeeId: emp.id,
-            teamId: emp.teamId,
-            date: weekStart,
-            message: `${emp.name} trabalhou no Domingo anterior (${formatShortDateBr(prevSunday)}) e está sem Folga (Dom.) nesta semana.`,
-          });
+      } else if (prevWeek) {
+        const prevSunday = addDays(weekStart, -1);
+        const workedPrevSunday = prevWeek.assignments[emp.id]?.[prevSunday]?.kind === 'SHIFT';
+        if (workedPrevSunday) {
+          const prevDays = getWeekDays(prevWeek.weekStart);
+          const alreadyHadInPrev = prevDays
+            .slice(0, 6)
+            .some((d) => prevWeek.assignments[emp.id]?.[d]?.kind === 'COMP_OFF');
+          const hasCompOffNow = days.slice(0, 6).some((d) => empDays[d]?.kind === 'COMP_OFF');
+          if (!alreadyHadInPrev && !hasCompOffNow) {
+            issues.push({
+              code: 'MISSING_SUNDAY_COMP_OFF',
+              severity: 'warning',
+              employeeId: emp.id,
+              teamId: emp.teamId,
+              date: weekStart,
+              message: `${emp.name} trabalhou no Domingo anterior (${formatShortDateBr(prevSunday)}) e está sem Folga (Dom.) nesta semana.`,
+            });
+          }
         }
       }
     }
@@ -260,7 +281,10 @@ export function validateWeekSchedule(params: {
     const prefix = activeEmployeesByTeam.size > 1 && teamName ? `[${teamName}] ` : '';
 
     for (const date of days) {
-      const applicable = getApplicableShiftsForDate(state, date);
+      const isSunday = getDayOfWeek(date) === 0;
+      const applicable = getApplicableShiftsForDate(state, date, true);
+      if (isSunday && !state.holidays[date] && rules.sundayStaffCount === 0) continue;
+
       for (const shift of applicable) {
         let count = 0;
         for (const emp of teamEmps) {
@@ -269,14 +293,19 @@ export function validateWeekSchedule(params: {
             count += 1;
           }
         }
-        if (count < shift.targetHeadcount) {
+        const target =
+          isSunday && !state.holidays[date]
+            ? Math.ceil(rules.sundayStaffCount / Math.max(1, applicable.length))
+            : shift.targetHeadcount;
+
+        if (count < target) {
           issues.push({
             code: 'UNDERSTAFFED',
             severity: 'info',
             teamId,
             date,
             shiftId: shift.id,
-            message: `${prefix}${shift.name} em ${formatShortDateBr(date)}: ${count}/${shift.targetHeadcount} colaborador(es).`,
+            message: `${prefix}${shift.name} em ${formatShortDateBr(date)}: ${count}/${target} colaborador(es).`,
           });
         }
       }
@@ -349,7 +378,7 @@ export function validateSwap(params: {
       if (receivedCell.kind !== 'SHIFT' || !receivedCell.shiftId) return;
       const shift = shiftsById.get(receivedCell.shiftId);
       if (!shift) return;
-      const applicable = getApplicableShiftsForDate(state, targetDate);
+      const applicable = getApplicableShiftsForDate(state, targetDate, false);
       if (!applicable.some((s) => s.id === shift.id)) {
         const empName = state.employees.find((e) => e.id === receivingEmpId)?.name ?? receivingEmpId;
         extraIssues.push({

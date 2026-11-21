@@ -132,10 +132,14 @@ export async function buildScheduleWorkbook(params: {
 
   const periodLabel = formatWeekRangeBr(weekStart);
   const monthLabel = formatMonthYearPt(getWeekReferenceMonthKey(weekStart));
+  const selectedTeamName =
+    teamIdFilter && activeTeams.length === 1 ? activeTeams[0].name : null;
 
   sheet.mergeCells('A1:H1');
   const titleCell = sheet.getCell('A1');
-  titleCell.value = `Escala Semanal (${periodLabel})`;
+  titleCell.value = selectedTeamName
+    ? `Escala Semanal · ${selectedTeamName} (${periodLabel})`
+    : `Escala Semanal (${periodLabel})`;
   titleCell.font = { name: 'Calibri', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
   titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E3A8A' } };
   titleCell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -335,6 +339,7 @@ export async function downloadScheduleXlsx(params: {
   state: AppState;
   weekStart: string;
   teamIdFilter?: string;
+  fileNameSuffix?: string;
 }): Promise<void> {
   const bytes = await exportScheduleToXlsxBuffer(params);
   const blob = new Blob([bytes.buffer as ArrayBuffer], {
@@ -343,7 +348,8 @@ export async function downloadScheduleXlsx(params: {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `escala-${params.weekStart}.xlsx`;
+  const suffix = params.fileNameSuffix ? `-${params.fileNameSuffix}` : '';
+  link.download = `escala${suffix}-${params.weekStart}.xlsx`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

@@ -13,21 +13,40 @@ export interface ExportCenterProps {
   week: WeekSchedule;
 }
 
+function slugifyTeamName(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [groupBy, setGroupBy] = useState<WhatsAppGroupBy>('day');
-  const [teamFilter, setTeamFilter] = useState<string>('all');
+  const activeTeams = useMemo(() => state.teams.filter((t) => t.active), [state.teams]);
+  const [selectedTeamId, setSelectedTeamId] = useState<string>(
+    () => activeTeams[0]?.id ?? '',
+  );
   const [includeNotes, setIncludeNotes] = useState(true);
   const [copied, setCopied] = useState(false);
   const [pngBusy, setPngBusy] = useState(false);
   const [xlsxBusy, setXlsxBusy] = useState(false);
   const [exportFeedback, setExportFeedback] = useState<string | null>(null);
 
-  const activeTeams = useMemo(() => state.teams.filter((t) => t.active), [state.teams]);
-  const effectiveTeamFilter =
-    teamFilter !== 'all' && activeTeams.some((t) => t.id === teamFilter)
-      ? teamFilter
-      : undefined;
+  const effectiveTeamId = useMemo(() => {
+    if (activeTeams.length === 0) return undefined;
+    if (activeTeams.some((t) => t.id === selectedTeamId)) return selectedTeamId;
+    return activeTeams[0].id;
+  }, [activeTeams, selectedTeamId]);
+
+  const selectedTeam = useMemo(
+    () => activeTeams.find((t) => t.id === effectiveTeamId),
+    [activeTeams, effectiveTeamId],
+  );
+
+  const teamSlug = selectedTeam ? slugifyTeamName(selectedTeam.name) : '';
 
   const generatedMessage = useMemo(
     () =>
@@ -39,9 +58,9 @@ export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
         weekStart,
         groupBy,
         includeNotes,
-        teamIdFilter: effectiveTeamFilter,
+        teamIdFilter: effectiveTeamId,
       }),
-    [state, weekStart, week, groupBy, includeNotes, effectiveTeamFilter],
+    [state, weekStart, week, groupBy, includeNotes, effectiveTeamId],
   );
 
   const [editableMessage, setEditableMessage] = useState(generatedMessage);
@@ -64,9 +83,10 @@ export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
   const handleDownloadPng = async () => {
     if (!cardRef.current) return;
     setPngBusy(true);
+    const filename = teamSlug ? `escala-${teamSlug}-${weekStart}.png` : `escala-${weekStart}.png`;
     try {
-      await downloadElementAsPng(cardRef.current, `escala-${weekStart}.png`);
-      setExportFeedback(`Imagem PNG gerada (escala-${weekStart}.png).`);
+      await downloadElementAsPng(cardRef.current, filename);
+      setExportFeedback(`Imagem PNG gerada (${filename}).`);
     } catch {
       setExportFeedback('Falha ao gerar imagem PNG.');
     } finally {
@@ -76,6 +96,7 @@ export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
 
   const handleDownloadXlsx = async () => {
     setXlsxBusy(true);
+    const filename = teamSlug ? `escala-${teamSlug}-${weekStart}.xlsx` : `escala-${weekStart}.xlsx`;
     try {
       const { downloadScheduleXlsx } = await import('@/exporters/excel');
       await downloadScheduleXlsx({
@@ -84,9 +105,10 @@ export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
           weeks: { ...state.weeks, [weekStart]: week },
         },
         weekStart,
-        teamIdFilter: effectiveTeamFilter,
+        teamIdFilter: effectiveTeamId,
+        fileNameSuffix: teamSlug || undefined,
       });
-      setExportFeedback(`Planilha Excel gerada (escala-${weekStart}.xlsx).`);
+      setExportFeedback(`Planilha Excel gerada (${filename}).`);
     } catch {
       setExportFeedback('Falha ao gerar planilha Excel.');
     } finally {
@@ -99,18 +121,18 @@ export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
       {activeTeams.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3">
           <div>
-            <p className="text-xs font-semibold text-slate-900">Escopo da exportação</p>
+            <p className="text-xs font-semibold text-slate-900">Equipe selecionada para exportação</p>
             <p className="text-[11px] text-slate-500">
-              Exporte todas as equipes agrupadas por seção ou filtre apenas uma equipe.
+              A mensagem WhatsApp, a planilha Excel (.xlsx) e a imagem PNG serão geradas exclusivamente para esta equipe.
             </p>
           </div>
           <SelectInput
             aria-label="Equipe para exportação"
-            value={effectiveTeamFilter ?? 'all'}
-            onChange={(e) => setTeamFilter(e.target.value)}
+            value={effectiveTeamId ?? ''}
+            onChange={(e) => setSelectedTeamId(e.target.value)}
             className="h-8 w-auto text-xs"
+            data-testid="export-team-select"
           >
-            <option value="all">Todas as equipes</option>
             {activeTeams.map((team) => (
               <option key={team.id} value={team.id}>
                 {team.name}
@@ -201,7 +223,7 @@ export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
           <div className="border-b border-slate-100 pb-3">
             <h2 className="text-sm font-semibold text-slate-900">Arquivos para Download</h2>
             <p className="text-xs text-slate-500">
-              Planilha Excel completa (.xlsx) e imagem PNG em alta resolução (2x)
+              Planilha Excel (.xlsx) e imagem PNG em alta resolução (2x) da equipe selecionada
             </p>
           </div>
 
@@ -212,7 +234,7 @@ export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
                 <h3 className="text-sm font-semibold">Planilha Excel (.xlsx)</h3>
               </div>
               <p className="mt-1.5 text-xs text-slate-600">
-                2 abas formatadas: <em>Escala Semanal</em> (separada por equipe, cores pastel, bordas) e{' '}
+                2 abas formatadas: <em>Escala Semanal</em> (cores pastel, bordas, painéis congelados) e{' '}
                 <em>Anotações e Trocas</em>.
               </p>
               <Button
@@ -261,7 +283,7 @@ export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
                 }}
                 weekStart={weekStart}
                 week={week}
-                teamIdFilter={effectiveTeamFilter}
+                teamIdFilter={effectiveTeamId}
               />
             </div>
           </div>

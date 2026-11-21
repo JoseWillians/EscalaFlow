@@ -1,5 +1,14 @@
 import { useState, type FormEvent } from 'react';
-import { CalendarOff, FolderPlus, Layers, Plus, Trash2, UserPlus } from 'lucide-react';
+import {
+  CalendarOff,
+  ChevronDown,
+  ChevronRight,
+  FolderPlus,
+  Layers,
+  Plus,
+  Trash2,
+  UserPlus,
+} from 'lucide-react';
 import { formatShortDateBr, getTodayIsoDate } from '@/domain/dates';
 import {
   UNAVAILABILITY_LABELS,
@@ -24,6 +33,8 @@ export interface TeamManagerProps {
 interface TeamSectionCardProps {
   team: Team;
   employees: Employee[];
+  expanded: boolean;
+  onToggleExpand: (teamId: string) => void;
   onToggleTeamActive: (teamId: string, active: boolean) => void;
   onDeleteTeam: (teamId: string) => void;
   onAddEmployee: (teamId: string, name: string, role: string, isBeginner: boolean) => void;
@@ -35,6 +46,8 @@ interface TeamSectionCardProps {
 function TeamSectionCard({
   team,
   employees,
+  expanded,
+  onToggleExpand,
   onToggleTeamActive,
   onDeleteTeam,
   onAddEmployee,
@@ -58,23 +71,40 @@ function TeamSectionCard({
 
   return (
     <section
-      className="rounded-lg border border-slate-200 bg-white p-4"
+      className="rounded-lg border border-slate-200 bg-white"
       data-testid={`team-section-${team.id}`}
     >
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
-        <div className="flex items-center gap-2.5">
+      <div
+        className={`flex flex-wrap items-center justify-between gap-3 px-4 py-3 ${
+          expanded ? 'border-b border-slate-100' : ''
+        }`}
+      >
+        <button
+          type="button"
+          onClick={() => onToggleExpand(team.id)}
+          aria-expanded={expanded}
+          data-testid={`toggle-team-collapse-${team.id}`}
+          className="flex flex-1 items-center gap-2.5 text-left"
+        >
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-slate-100 text-slate-700">
+            {expanded ? (
+              <ChevronDown className="h-4 w-4" />
+            ) : (
+              <ChevronRight className="h-4 w-4" />
+            )}
+          </span>
           <div className="flex h-8 w-8 items-center justify-center rounded-md bg-blue-50 text-blue-700">
             <Layers className="h-4 w-4" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-sm font-semibold text-slate-900">{team.name}</h3>
               <Badge tone="neutral">{employees.length} membro(s)</Badge>
               {!team.active && <Badge tone="warn">Equipe inativa</Badge>}
             </div>
             {team.description && <p className="text-xs text-slate-500">{team.description}</p>}
           </div>
-        </div>
+        </button>
 
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5">
@@ -100,120 +130,124 @@ function TeamSectionCard({
         </div>
       </div>
 
-      <form
-        onSubmit={handleSubmit}
-        className="mt-3 grid gap-2.5 rounded-md border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-12"
-      >
-        <div className="sm:col-span-5">
-          <FieldLabel htmlFor={`emp-name-${team.id}`}>Nome do colaborador</FieldLabel>
-          <TextInput
-            id={`emp-name-${team.id}`}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Ex.: Mariana Azevedo"
-            required
-            className="mt-1"
-          />
-        </div>
-        <div className="sm:col-span-4">
-          <FieldLabel htmlFor={`emp-role-${team.id}`}>Função</FieldLabel>
-          <TextInput
-            id={`emp-role-${team.id}`}
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-            placeholder="Ex.: Atendimento"
-            className="mt-1"
-          />
-        </div>
-        <div className="flex items-end sm:col-span-3">
-          <Button
-            type="submit"
-            tone="primary"
-            size="md"
-            className="w-full"
-            data-testid={`add-employee-btn-${team.id}`}
+      {expanded && (
+        <div className="p-4 pt-3">
+          <form
+            onSubmit={handleSubmit}
+            className="grid gap-2.5 rounded-md border border-slate-100 bg-slate-50/70 p-3 sm:grid-cols-12"
           >
-            <UserPlus className="h-4 w-4" />
-            <span>Adicionar</span>
-          </Button>
-        </div>
-        <div className="flex items-center gap-2 sm:col-span-12">
-          <SwitchControl
-            id={`new-beg-${team.id}`}
-            checked={isBeginner}
-            onCheckedChange={setIsBeginner}
-            ariaLabel={`Marcar novo colaborador de ${team.name} como Iniciante`}
-          />
-          <label htmlFor={`new-beg-${team.id}`} className="text-xs text-slate-700">
-            Marcar como <strong>Iniciante</strong> (bloqueia 12h–22h, domingos e feriados com expediente)
-          </label>
-        </div>
-      </form>
+            <div className="sm:col-span-5">
+              <FieldLabel htmlFor={`emp-name-${team.id}`}>Nome do colaborador</FieldLabel>
+              <TextInput
+                id={`emp-name-${team.id}`}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Ex.: Mariana Azevedo"
+                required
+                className="mt-1"
+              />
+            </div>
+            <div className="sm:col-span-4">
+              <FieldLabel htmlFor={`emp-role-${team.id}`}>Função</FieldLabel>
+              <TextInput
+                id={`emp-role-${team.id}`}
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                placeholder="Ex.: Atendimento"
+                className="mt-1"
+              />
+            </div>
+            <div className="flex items-end sm:col-span-3">
+              <Button
+                type="submit"
+                tone="primary"
+                size="md"
+                className="w-full"
+                data-testid={`add-employee-btn-${team.id}`}
+              >
+                <UserPlus className="h-4 w-4" />
+                <span>Adicionar</span>
+              </Button>
+            </div>
+            <div className="flex items-center gap-2 sm:col-span-12">
+              <SwitchControl
+                id={`new-beg-${team.id}`}
+                checked={isBeginner}
+                onCheckedChange={setIsBeginner}
+                ariaLabel={`Marcar novo colaborador de ${team.name} como Iniciante`}
+              />
+              <label htmlFor={`new-beg-${team.id}`} className="text-xs text-slate-700">
+                Marcar como <strong>Iniciante</strong> (bloqueia 12h–22h, domingos e feriados com expediente)
+              </label>
+            </div>
+          </form>
 
-      {employees.length === 0 ? (
-        <p className="py-5 text-center text-xs text-slate-500">
-          Nenhum colaborador nesta equipe. Adicione acima para começar.
-        </p>
-      ) : (
-        <ul className="mt-3 divide-y divide-slate-100">
-          {employees.map((emp) => (
-            <li
-              key={emp.id}
-              className="flex flex-wrap items-center justify-between gap-3 py-2.5"
-            >
-              <div className="min-w-[180px]">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`text-sm font-medium ${
-                      emp.active ? 'text-slate-900' : 'text-slate-400 line-through'
-                    }`}
-                  >
-                    {emp.name}
-                  </span>
-                  {emp.isBeginner && <Badge tone="beginner">Iniciante</Badge>}
-                  {!emp.active && <Badge tone="neutral">Inativo</Badge>}
-                </div>
-                {emp.role && <p className="text-xs text-slate-500">Função: {emp.role}</p>}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-4">
-                <div className="flex items-center gap-1.5">
-                  <SwitchControl
-                    id={`beg-${emp.id}`}
-                    checked={emp.isBeginner}
-                    onCheckedChange={(checked) => onToggleBeginner(emp.id, checked)}
-                    ariaLabel={`Alternar tag Iniciante para ${emp.name}`}
-                  />
-                  <label htmlFor={`beg-${emp.id}`} className="text-xs text-slate-700">
-                    Iniciante
-                  </label>
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <SwitchControl
-                    id={`act-${emp.id}`}
-                    checked={emp.active}
-                    onCheckedChange={(checked) => onToggleEmployeeActive(emp.id, checked)}
-                    ariaLabel={`Ativar ou inativar ${emp.name}`}
-                  />
-                  <label htmlFor={`act-${emp.id}`} className="text-xs text-slate-700">
-                    Ativo
-                  </label>
-                </div>
-
-                <Button
-                  tone="ghost"
-                  size="icon"
-                  aria-label={`Excluir ${emp.name}`}
-                  onClick={() => onDeleteEmployee(emp.id)}
-                  className="text-slate-500 hover:text-red-600"
+          {employees.length === 0 ? (
+            <p className="py-5 text-center text-xs text-slate-500">
+              Nenhum colaborador nesta equipe. Adicione acima para começar.
+            </p>
+          ) : (
+            <ul className="mt-3 divide-y divide-slate-100">
+              {employees.map((emp) => (
+                <li
+                  key={emp.id}
+                  className="flex flex-wrap items-center justify-between gap-3 py-2.5"
                 >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </div>
-            </li>
-          ))}
-        </ul>
+                  <div className="min-w-[180px]">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`text-sm font-medium ${
+                          emp.active ? 'text-slate-900' : 'text-slate-400 line-through'
+                        }`}
+                      >
+                        {emp.name}
+                      </span>
+                      {emp.isBeginner && <Badge tone="beginner">Iniciante</Badge>}
+                      {!emp.active && <Badge tone="neutral">Inativo</Badge>}
+                    </div>
+                    {emp.role && <p className="text-xs text-slate-500">Função: {emp.role}</p>}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-4">
+                    <div className="flex items-center gap-1.5">
+                      <SwitchControl
+                        id={`beg-${emp.id}`}
+                        checked={emp.isBeginner}
+                        onCheckedChange={(checked) => onToggleBeginner(emp.id, checked)}
+                        ariaLabel={`Alternar tag Iniciante para ${emp.name}`}
+                      />
+                      <label htmlFor={`beg-${emp.id}`} className="text-xs text-slate-700">
+                        Iniciante
+                      </label>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <SwitchControl
+                        id={`act-${emp.id}`}
+                        checked={emp.active}
+                        onCheckedChange={(checked) => onToggleEmployeeActive(emp.id, checked)}
+                        ariaLabel={`Ativar ou inativar ${emp.name}`}
+                      />
+                      <label htmlFor={`act-${emp.id}`} className="text-xs text-slate-700">
+                        Ativo
+                      </label>
+                    </div>
+
+                    <Button
+                      tone="ghost"
+                      size="icon"
+                      aria-label={`Excluir ${emp.name}`}
+                      onClick={() => onDeleteEmployee(emp.id)}
+                      className="text-slate-500 hover:text-red-600"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </section>
   );
@@ -227,6 +261,7 @@ export function TeamManager({
 }: TeamManagerProps) {
   const [teamName, setTeamName] = useState('');
   const [teamDescription, setTeamDescription] = useState('');
+  const [collapsedTeams, setCollapsedTeams] = useState<Record<string, boolean>>({});
 
   const [unavailEmpId, setUnavailEmpId] = useState(state.employees[0]?.id ?? '');
   const [unavailStart, setUnavailStart] = useState(getTodayIsoDate());
@@ -315,6 +350,18 @@ export function TeamManager({
     setUnavailNote('');
   };
 
+  const toggleExpand = (teamId: string) => {
+    setCollapsedTeams((prev) => ({ ...prev, [teamId]: !prev[teamId] }));
+  };
+
+  const setAllExpanded = (expanded: boolean) => {
+    const next: Record<string, boolean> = {};
+    for (const t of state.teams) {
+      next[t.id] = !expanded;
+    }
+    setCollapsedTeams(next);
+  };
+
   return (
     <div className="grid gap-6 lg:grid-cols-3">
       <div className="space-y-5 lg:col-span-2">
@@ -360,6 +407,17 @@ export function TeamManager({
           </form>
         </section>
 
+        {state.teams.length > 1 && (
+          <div className="flex items-center justify-end gap-2">
+            <Button tone="outline" size="sm" onClick={() => setAllExpanded(true)}>
+              Expandir todas
+            </Button>
+            <Button tone="outline" size="sm" onClick={() => setAllExpanded(false)}>
+              Recolher todas
+            </Button>
+          </div>
+        )}
+
         {state.teams.length === 0 ? (
           <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center">
             <p className="text-sm font-medium text-slate-800">Nenhuma equipe criada ainda</p>
@@ -374,6 +432,8 @@ export function TeamManager({
                 key={team.id}
                 team={team}
                 employees={state.employees.filter((e) => e.teamId === team.id)}
+                expanded={!collapsedTeams[team.id]}
+                onToggleExpand={toggleExpand}
                 onToggleTeamActive={handleToggleTeamActive}
                 onDeleteTeam={handleDeleteTeam}
                 onAddEmployee={handleAddEmployeeToTeam}

@@ -9,6 +9,7 @@ import type {
   AppState,
   CellAssignment,
   Employee,
+  ScheduleRules,
   ShiftTemplate,
   WeekSchedule,
 } from '@/domain/schemas';
@@ -19,6 +20,7 @@ import {
 import {
   getApplicableShiftsForDate,
   getEmployeeUnavailabilityOnDate,
+  getScheduleRules,
   hasInterjornadaViolation,
 } from './validator';
 
@@ -137,7 +139,7 @@ function pickBestCompOffDay(params: {
       const available = teamEmployees.filter(
         (e) => assignments[e.id]?.[date] === undefined,
       ).length;
-      const needed = getApplicableShiftsForDate(state, date).reduce(
+      const needed = getApplicableShiftsForDate(state, date, true).reduce(
         (acc, s) => acc + s.targetHeadcount,
         0,
       );
@@ -154,6 +156,7 @@ function pickBestCompOffDay(params: {
 
 function scheduleTeamWeek(params: {
   state: AppState;
+  rules: ScheduleRules;
   weekStart: string;
   teamEmployees: Employee[];
   assignments: Record<string, Record<string, CellAssignment>>;
@@ -163,6 +166,7 @@ function scheduleTeamWeek(params: {
 }): void {
   const {
     state,
+    rules,
     weekStart,
     teamEmployees,
     assignments,
@@ -179,7 +183,7 @@ function scheduleTeamWeek(params: {
   const empIndexMap = new Map(teamEmployees.map((e, idx) => [e.id, idx]));
 
   // Modo semana seguinte: aloca Folga (Dom.) nesta semana para quem trabalhou no domingo anterior
-  if (state.sundayCompMode === 'next_week') {
+  if (rules.enforceSundayCompOff && state.sundayCompMode === 'next_week') {
     const prevWeek = state.weeks[addDays(weekStart, -7)];
     const prevDays = prevWeek ? getWeekDays(prevWeek.weekStart) : [];
     for (const emp of teamEmployees) {
@@ -203,8 +207,11 @@ function scheduleTeamWeek(params: {
     }
   }
 
-  // Passo A: Escalar o Domingo (2 pessoas por padrão no turno 08:00 às 18:00)
-  const sundayShifts = getApplicableShiftsForDate(state, sundayDate);
+  // Passo A: Escalar o Domingo conforme sundayStaffCount configurado pelo líder
+  const sundayShifts =
+    rules.sundayStaffCount === 0 && !state.holidays[sundayDate]
+      ? []
+      : getApplicableShiftsForDate(state, sundayDate, true);
   const sundayMonthKey = getMonthKey(sundayDate);
   const sundayMonthMetrics = getSavedMonthMetricsExcludingWeek(state, sundayMonthKey, weekStart);
 
@@ -214,26 +221,27 @@ function scheduleTeamWeek(params: {
       .map((e) => e.id),
   );
 
-  for (const shift of sundayShifts) {
-    const alreadyInShift = teamEmployees.filter(
-      (e) =>
-        assignments[e.id]?.[sundayDate]?.kind === 'SHIFT' &&
-        assignments[e.id]?.[sundayDate]?.shiftId === shift.id,
-    ).length;
+  if (sundayShifts.length > 0 && rules.sundayStaffCount > 0) {
+    let remainingTotal = Math.max(0, rules.sundayStaffCount - sundayAssignedEmployees.size);
+    let shiftCursor = 0;
 
-    let remaining = Math.max(0, shift.targetHeadcount - alreadyInShift);
-    while (remaining > 0) {
+    while (remainingTotal > 0) {
+      const shift = sundayShifts[shiftCursor % sundayShifts.length];
+      shiftCursor += 1;
+
       const candidates = teamEmployees.filter((emp) => {
-        if (emp.isBeginner) return false;
+        if (rules.enforceBeginnerRestrictions && emp.isBeginner) return false;
         if (assignments[emp.id]?.[sundayDate] !== undefined) return false;
         return true;
       });
       if (candidates.length === 0) break;
 
       candidates.sort((a, b) => {
-        const prevA = prevSundayWorkers.has(a.id) ? 1 : 0;
-        const prevB = prevSundayWorkers.has(b.id) ? 1 : 0;
-        if (prevA !== prevB) return prevA - prevB;
+        if (rules.avoidConsecutiveSundays) {
+          const prevA = prevSundayWorkers.has(a.id) ? 1 : 0;
+          const prevB = prevSundayWorkers.has(b.id) ? 1 : 0;
+          if (prevA !== prevB) return prevA - prevB;
+        }
 
         const sunA = sundayMonthMetrics.sundayCounts.get(a.id) ?? 0;
         const sunB = sundayMonthMetrics.sundayCounts.get(b.id) ?? 0;
@@ -255,12 +263,12 @@ function scheduleTeamWeek(params: {
         locked: false,
       };
       sundayAssignedEmployees.add(chosen.id);
-      remaining -= 1;
+      remainingTotal -= 1;
     }
   }
 
-  // Se Folga (Dom.) for na mesma semana, garante 1 dia de COMP_OFF em Seg-Sáb para quem trabalha no Domingo
-  if (state.sundayCompMode === 'same_week') {
+  // Se Folga (Dom.) for na mesma semana e regra ativa, garante 1 dia de COMP_OFF em Seg-Sáb
+  if (rules.enforceSundayCompOff && state.sundayCompMode === 'same_week') {
     for (const empId of sundayAssignedEmployees) {
       const alreadyHasCompOff = weekdays.some((d) => assignments[empId]?.[d]?.kind === 'COMP_OFF');
       if (alreadyHasCompOff) continue;
@@ -297,8 +305,7 @@ function scheduleTeamWeek(params: {
     const holiday = state.holidays[date];
     const isHolidaySpecial = holiday?.mode === 'special';
 
-    // Em feriado especial, iniciantes não trabalham: recebem folga de feriado
-    if (isHolidaySpecial) {
+    if (isHolidaySpecial && rules.enforceBeginnerRestrictions) {
       for (const emp of teamEmployees) {
         if (emp.isBeginner && assignments[emp.id]?.[date] === undefined) {
           assignments[emp.id][date] = { kind: 'HOLIDAY_OFF', locked: false };
@@ -306,7 +313,7 @@ function scheduleTeamWeek(params: {
       }
     }
 
-    const applicable = getApplicableShiftsForDate(state, date);
+    const applicable = getApplicableShiftsForDate(state, date, true);
     if (applicable.length === 0) continue;
 
     const monthKey = getMonthKey(date);
@@ -322,64 +329,68 @@ function scheduleTeamWeek(params: {
       remainingNeed.set(shift.id, Math.max(0, shift.targetHeadcount - already));
     }
 
-    // Subpasso B1: Turnos noturnos (isNightShift) primeiro para preservar elegíveis com 0 ocorrências no mês
+    // Subpasso B1: Turnos noturnos (isNightShift) primeiro
     const nightShifts = applicable.filter((s) => s.isNightShift);
     for (const shift of nightShifts) {
       let need = remainingNeed.get(shift.id) ?? 0;
       while (need > 0) {
         const candidates = teamEmployees.filter((emp) => {
-          if (emp.isBeginner) return false;
+          if (rules.enforceBeginnerRestrictions && emp.isBeginner) return false;
           if (assignments[emp.id]?.[date] !== undefined) return false;
           return true;
         });
         if (candidates.length === 0) break;
 
         candidates.sort((a, b) => {
-          const mNightA = getCurrentMonthNightCount({
-            employeeId: a.id,
-            monthKey,
-            savedNightCounts,
-            assignments,
-            days,
-            shiftsById,
-          });
-          const mNightB = getCurrentMonthNightCount({
-            employeeId: b.id,
-            monthKey,
-            savedNightCounts,
-            assignments,
-            days,
-            shiftsById,
-          });
-          if (mNightA !== mNightB) return mNightA - mNightB;
+          if (rules.enforceNightShiftMonthlyRotation) {
+            const mNightA = getCurrentMonthNightCount({
+              employeeId: a.id,
+              monthKey,
+              savedNightCounts,
+              assignments,
+              days,
+              shiftsById,
+            });
+            const mNightB = getCurrentMonthNightCount({
+              employeeId: b.id,
+              monthKey,
+              savedNightCounts,
+              assignments,
+              days,
+              shiftsById,
+            });
+            if (mNightA !== mNightB) return mNightA - mNightB;
 
-          const wNightA = countWeekNightShifts(assignments, a.id, days, shiftsById);
-          const wNightB = countWeekNightShifts(assignments, b.id, days, shiftsById);
-          if (wNightA !== wNightB) return wNightA - wNightB;
+            const wNightA = countWeekNightShifts(assignments, a.id, days, shiftsById);
+            const wNightB = countWeekNightShifts(assignments, b.id, days, shiftsById);
+            if (wNightA !== wNightB) return wNightA - wNightB;
+          }
 
-          const interA = wouldViolateInterjornada({
-            employeeId: a.id,
-            date,
-            candidateShift: shift,
-            weekStart,
-            assignments,
-            state,
-            shiftsById,
-          })
-            ? 1
-            : 0;
-          const interB = wouldViolateInterjornada({
-            employeeId: b.id,
-            date,
-            candidateShift: shift,
-            weekStart,
-            assignments,
-            state,
-            shiftsById,
-          })
-            ? 1
-            : 0;
-          if (interA !== interB) return interA - interB;
+          if (rules.warnInterjornadaUnder11h) {
+            const interA = wouldViolateInterjornada({
+              employeeId: a.id,
+              date,
+              candidateShift: shift,
+              weekStart,
+              assignments,
+              state,
+              shiftsById,
+            })
+              ? 1
+              : 0;
+            const interB = wouldViolateInterjornada({
+              employeeId: b.id,
+              date,
+              candidateShift: shift,
+              weekStart,
+              assignments,
+              state,
+              shiftsById,
+            })
+              ? 1
+              : 0;
+            if (interA !== interB) return interA - interB;
+          }
 
           const shiftsA = countWeekShifts(assignments, a.id, days);
           const shiftsB = countWeekShifts(assignments, b.id, days);
@@ -414,55 +425,59 @@ function scheduleTeamWeek(params: {
         if (need <= 0) continue;
 
         const candidates = teamEmployees.filter((emp) => {
-          if (isHolidaySpecial && emp.isBeginner) return false;
+          if (rules.enforceBeginnerRestrictions && isHolidaySpecial && emp.isBeginner) return false;
           if (assignments[emp.id]?.[date] !== undefined) return false;
           return true;
         });
         if (candidates.length === 0) continue;
 
         candidates.sort((a, b) => {
-          const interA = wouldViolateInterjornada({
-            employeeId: a.id,
-            date,
-            candidateShift: shift,
-            weekStart,
-            assignments,
-            state,
-            shiftsById,
-          })
-            ? 1
-            : 0;
-          const interB = wouldViolateInterjornada({
-            employeeId: b.id,
-            date,
-            candidateShift: shift,
-            weekStart,
-            assignments,
-            state,
-            shiftsById,
-          })
-            ? 1
-            : 0;
-          if (interA !== interB) return interA - interB;
+          if (rules.warnInterjornadaUnder11h) {
+            const interA = wouldViolateInterjornada({
+              employeeId: a.id,
+              date,
+              candidateShift: shift,
+              weekStart,
+              assignments,
+              state,
+              shiftsById,
+            })
+              ? 1
+              : 0;
+            const interB = wouldViolateInterjornada({
+              employeeId: b.id,
+              date,
+              candidateShift: shift,
+              weekStart,
+              assignments,
+              state,
+              shiftsById,
+            })
+              ? 1
+              : 0;
+            if (interA !== interB) return interA - interB;
+          }
 
           const shiftsA = countWeekShifts(assignments, a.id, days);
           const shiftsB = countWeekShifts(assignments, b.id, days);
           if (shiftsA !== shiftsB) return shiftsA - shiftsB;
 
-          const reserveScore = (emp: Employee) => {
-            if (emp.isBeginner) return 0;
-            const mNight = getCurrentMonthNightCount({
-              employeeId: emp.id,
-              monthKey,
-              savedNightCounts,
-              assignments,
-              days,
-              shiftsById,
-            });
-            return mNight === 0 ? 2 : 1;
-          };
-          const resDiff = reserveScore(a) - reserveScore(b);
-          if (resDiff !== 0) return resDiff;
+          if (rules.enforceNightShiftMonthlyRotation) {
+            const reserveScore = (emp: Employee) => {
+              if (rules.enforceBeginnerRestrictions && emp.isBeginner) return 0;
+              const mNight = getCurrentMonthNightCount({
+                employeeId: emp.id,
+                monthKey,
+                savedNightCounts,
+                assignments,
+                days,
+                shiftsById,
+              });
+              return mNight === 0 ? 2 : 1;
+            };
+            const resDiff = reserveScore(a) - reserveScore(b);
+            if (resDiff !== 0) return resDiff;
+          }
 
           const tieA = ((empIndexMap.get(a.id) ?? 0) + dayIdx + weekSeed) % teamEmployees.length;
           const tieB = ((empIndexMap.get(b.id) ?? 0) + dayIdx + weekSeed) % teamEmployees.length;
@@ -480,71 +495,75 @@ function scheduleTeamWeek(params: {
       }
     }
 
-    // Subpasso B3: Regra de jornada Seg-Sáb: quem NÃO está de Folga (Dom.)/Indisponível/Feriado
-    // não recebe folga no meio da semana — deve ser alocado em um turno elegível daquele dia
-    const remainingEmployees = teamEmployees.filter(
-      (emp) => assignments[emp.id]?.[date] === undefined,
-    );
-    for (const emp of remainingEmployees) {
-      const eligibleShifts = applicable.filter((shift) => {
-        if (emp.isBeginner && (shift.isNightShift || isHolidaySpecial)) return false;
-        return true;
-      });
-      if (eligibleShifts.length === 0) continue;
+    // Subpasso B3: Só folga no meio da semana quem trabalhou no domingo (se a regra estiver ativa)
+    if (rules.noMidweekOffWithoutSunday) {
+      const remainingEmployees = teamEmployees.filter(
+        (emp) => assignments[emp.id]?.[date] === undefined,
+      );
+      for (const emp of remainingEmployees) {
+        const eligibleShifts = applicable.filter((shift) => {
+          if (rules.enforceBeginnerRestrictions && emp.isBeginner && (shift.isNightShift || isHolidaySpecial)) {
+            return false;
+          }
+          return true;
+        });
+        if (eligibleShifts.length === 0) continue;
 
-      eligibleShifts.sort((a, b) => {
-        const interA = wouldViolateInterjornada({
-          employeeId: emp.id,
-          date,
-          candidateShift: a,
-          weekStart,
-          assignments,
-          state,
-          shiftsById,
-        })
-          ? 1
-          : 0;
-        const interB = wouldViolateInterjornada({
-          employeeId: emp.id,
-          date,
-          candidateShift: b,
-          weekStart,
-          assignments,
-          state,
-          shiftsById,
-        })
-          ? 1
-          : 0;
-        if (interA !== interB) return interA - interB;
+        eligibleShifts.sort((a, b) => {
+          if (rules.warnInterjornadaUnder11h) {
+            const interA = wouldViolateInterjornada({
+              employeeId: emp.id,
+              date,
+              candidateShift: a,
+              weekStart,
+              assignments,
+              state,
+              shiftsById,
+            })
+              ? 1
+              : 0;
+            const interB = wouldViolateInterjornada({
+              employeeId: emp.id,
+              date,
+              candidateShift: b,
+              weekStart,
+              assignments,
+              state,
+              shiftsById,
+            })
+              ? 1
+              : 0;
+            if (interA !== interB) return interA - interB;
+          }
 
-        // Prefere turnos diurnos ao distribuir excedente
-        const nightA = a.isNightShift ? 1 : 0;
-        const nightB = b.isNightShift ? 1 : 0;
-        if (nightA !== nightB) return nightA - nightB;
+          const nightA = a.isNightShift ? 1 : 0;
+          const nightB = b.isNightShift ? 1 : 0;
+          if (nightA !== nightB) return nightA - nightB;
 
-        const countOnShift = (shiftId: string) =>
-          teamEmployees.filter(
-            (e) =>
-              assignments[e.id]?.[date]?.kind === 'SHIFT' &&
-              assignments[e.id]?.[date]?.shiftId === shiftId,
-          ).length;
+          const countOnShift = (shiftId: string) =>
+            teamEmployees.filter(
+              (e) =>
+                assignments[e.id]?.[date]?.kind === 'SHIFT' &&
+                assignments[e.id]?.[date]?.shiftId === shiftId,
+            ).length;
 
-        const ratioA = countOnShift(a.id) / Math.max(1, a.targetHeadcount);
-        const ratioB = countOnShift(b.id) / Math.max(1, b.targetHeadcount);
-        if (ratioA !== ratioB) return ratioA - ratioB;
+          const ratioA = countOnShift(a.id) / Math.max(1, a.targetHeadcount);
+          const ratioB = countOnShift(b.id) / Math.max(1, b.targetHeadcount);
+          if (ratioA !== ratioB) return ratioA - ratioB;
 
-        return a.startTime.localeCompare(b.startTime);
-      });
+          return a.startTime.localeCompare(b.startTime);
+        });
 
-      assignments[emp.id][date] = {
-        kind: 'SHIFT',
-        shiftId: eligibleShifts[0].id,
-        locked: false,
-      };
+        assignments[emp.id][date] = {
+          kind: 'SHIFT',
+          shiftId: eligibleShifts[0].id,
+          locked: false,
+        };
+      }
     }
   }
 
-  // Passo C: Preenche células restantes (em especial o Domingo para quem não foi escalado) como Folga ('OFF')
+  // Passo C: Células restantes recebem Folga ('OFF')
   for (const emp of teamEmployees) {
     for (const date of days) {
       if (assignments[emp.id][date] === undefined) {
@@ -560,6 +579,7 @@ export function generateWeekSchedule(params: {
   existingWeek?: WeekSchedule;
 }): WeekSchedule {
   const { state, weekStart, existingWeek } = params;
+  const rules = getScheduleRules(state);
   const days = getWeekDays(weekStart);
   const weekSeed = getWeekSeed(weekStart);
 
@@ -609,7 +629,6 @@ export function generateWeekSchedule(params: {
 
   const prevSundayWorkers = getPreviousSundayWorkers(state, weekStart);
 
-  // Agrupa colaboradores ativos por equipe e executa o motor para cada equipe separadamente
   const employeesByTeam = new Map<string, Employee[]>();
   for (const team of state.teams) {
     if (team.active) {
@@ -625,6 +644,7 @@ export function generateWeekSchedule(params: {
   for (const teamEmployees of employeesByTeam.values()) {
     scheduleTeamWeek({
       state,
+      rules,
       weekStart,
       teamEmployees,
       assignments,

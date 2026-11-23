@@ -48,8 +48,15 @@ export interface SwapValidationResult {
   simulatedWeek: WeekSchedule;
 }
 
-export function getScheduleRules(state: AppState): ScheduleRules {
-  return state.scheduleRules ?? DEFAULT_SCHEDULE_RULES;
+export function getScheduleRules(state: AppState, teamId?: string): ScheduleRules {
+  const general = state.scheduleRules ?? DEFAULT_SCHEDULE_RULES;
+  if (!teamId) return general;
+  const team = state.teams.find((t) => t.id === teamId);
+  if (!team?.rulesOverride) return general;
+  return {
+    ...general,
+    ...team.rulesOverride,
+  };
 }
 
 export function getEmployeeUnavailabilityOnDate(
@@ -66,8 +73,9 @@ export function getApplicableShiftsForDate(
   state: AppState,
   date: string,
   respectSelectedForGeneration = false,
+  teamId?: string,
 ): ShiftTemplate[] {
-  const rules = getScheduleRules(state);
+  const rules = getScheduleRules(state, teamId);
   let activeShifts = state.shifts.filter((s) => s.active);
   if (respectSelectedForGeneration && rules.selectedShiftIdsForGeneration.length > 0) {
     const selectedSet = new Set(rules.selectedShiftIdsForGeneration);
@@ -115,7 +123,6 @@ export function validateWeekSchedule(params: {
   week: WeekSchedule;
 }): ScheduleIssue[] {
   const { state, weekStart, week } = params;
-  const rules = getScheduleRules(state);
   const issues: ScheduleIssue[] = [];
   const days = getWeekDays(weekStart);
   const shiftsById = new Map(state.shifts.map((s) => [s.id, s]));
@@ -128,6 +135,7 @@ export function validateWeekSchedule(params: {
   );
 
   for (const emp of trackedEmployees) {
+    const empRules = getScheduleRules(state, emp.teamId);
     const empDays = week.assignments[emp.id] ?? {};
 
     for (const date of days) {
@@ -135,11 +143,17 @@ export function validateWeekSchedule(params: {
       if (!cell) continue;
 
       const dateBr = formatShortDateBr(date);
-      const isSunday = getDayOfWeek(date) === 0;
+      const dow = getDayOfWeek(date);
+      const isSunday = dow === 0;
+      const isSaturday = dow === 6;
       const holiday = state.holidays[date];
       const isHolidaySpecial = holiday?.mode === 'special';
+      const allowOffOnDay =
+        isSunday ||
+        (isSaturday && !holiday && empRules.saturdayStaffCount !== null) ||
+        (isHolidaySpecial && empRules.holidayStaffCount !== null);
 
-      if (rules.noMidweekOffWithoutSunday && emp.active && !isSunday && cell.kind === 'OFF') {
+      if (empRules.noMidweekOffWithoutSunday && emp.active && !allowOffOnDay && cell.kind === 'OFF') {
         issues.push({
           code: 'MIDWEEK_OFF_WITHOUT_SUNDAY',
           severity: 'warning',
@@ -154,7 +168,7 @@ export function validateWeekSchedule(params: {
 
       const shift = cell.shiftId ? shiftsById.get(cell.shiftId) : undefined;
 
-      if (rules.enforceBeginnerRestrictions && emp.isBeginner) {
+      if (empRules.enforceBeginnerRestrictions && emp.isBeginner) {
         if (shift?.isNightShift) {
           issues.push({
             code: 'BEGINNER_NIGHT_SHIFT',
@@ -203,7 +217,7 @@ export function validateWeekSchedule(params: {
         });
       }
 
-      if (rules.warnInterjornadaUnder11h) {
+      if (empRules.warnInterjornadaUnder11h) {
         const prevDate = addDays(date, -1);
         const prevCell =
           prevDate >= weekStart ? empDays[prevDate] : prevWeek?.assignments[emp.id]?.[prevDate];
@@ -227,7 +241,7 @@ export function validateWeekSchedule(params: {
       }
     }
 
-    if (rules.enforceSundayCompOff) {
+    if (empRules.enforceSundayCompOff) {
       if (state.sundayCompMode === 'same_week') {
         const workedSunday = empDays[days[6]]?.kind === 'SHIFT';
         if (workedSunday) {
@@ -267,7 +281,7 @@ export function validateWeekSchedule(params: {
     }
   }
 
-  // Checa cobertura alvo por equipe ativa e turno em cada dia
+  // Checa cobertura alvo por equipe ativa e turno em cada dia (respeitando regra da equipe)
   const activeEmployeesByTeam = new Map<string, Employee[]>();
   for (const emp of trackedEmployees) {
     if (!employeesById.get(emp.id)?.active) continue;
@@ -277,13 +291,37 @@ export function validateWeekSchedule(params: {
   }
 
   for (const [teamId, teamEmps] of activeEmployeesByTeam.entries()) {
+    const teamRules = getScheduleRules(state, teamId);
     const teamName = teamsById.get(teamId)?.name;
     const prefix = activeEmployeesByTeam.size > 1 && teamName ? `[${teamName}] ` : '';
 
     for (const date of days) {
-      const isSunday = getDayOfWeek(date) === 0;
-      const applicable = getApplicableShiftsForDate(state, date, true);
-      if (isSunday && !state.holidays[date] && rules.sundayStaffCount === 0) continue;
+      const dow = getDayOfWeek(date);
+      const isSunday = dow === 0;
+      const isSaturday = dow === 6;
+      const holiday = state.holidays[date];
+      const isHolidaySpecial = holiday?.mode === 'special';
+      const applicable = getApplicableShiftsForDate(state, date, true, teamId);
+      if (isSunday && !holiday && teamRules.sundayStaffCount === 0) continue;
+      if (isSaturday && !holiday && teamRules.saturdayStaffCount === 0) continue;
+      if (isHolidaySpecial && teamRules.holidayStaffCount === 0) continue;
+
+      const totalAssignedOnDay = teamEmps.filter(
+        (emp) => week.assignments[emp.id]?.[date]?.kind === 'SHIFT',
+      ).length;
+
+      const dayExplicitCap =
+        isHolidaySpecial && teamRules.holidayStaffCount !== null
+          ? teamRules.holidayStaffCount
+          : isSaturday && !holiday && teamRules.saturdayStaffCount !== null
+            ? teamRules.saturdayStaffCount
+            : isSunday && !holiday
+              ? teamRules.sundayStaffCount
+              : null;
+
+      if (dayExplicitCap !== null && totalAssignedOnDay >= dayExplicitCap) {
+        continue;
+      }
 
       for (const shift of applicable) {
         let count = 0;
@@ -294,8 +332,8 @@ export function validateWeekSchedule(params: {
           }
         }
         const target =
-          isSunday && !state.holidays[date]
-            ? Math.ceil(rules.sundayStaffCount / Math.max(1, applicable.length))
+          dayExplicitCap !== null
+            ? Math.ceil(dayExplicitCap / Math.max(1, applicable.length))
             : shift.targetHeadcount;
 
         if (count < target) {
@@ -378,7 +416,8 @@ export function validateSwap(params: {
       if (receivedCell.kind !== 'SHIFT' || !receivedCell.shiftId) return;
       const shift = shiftsById.get(receivedCell.shiftId);
       if (!shift) return;
-      const applicable = getApplicableShiftsForDate(state, targetDate, false);
+      const empTeamId = state.employees.find((e) => e.id === receivingEmpId)?.teamId;
+      const applicable = getApplicableShiftsForDate(state, targetDate, false, empTeamId);
       if (!applicable.some((s) => s.id === shift.id)) {
         const empName = state.employees.find((e) => e.id === receivingEmpId)?.name ?? receivingEmpId;
         extraIssues.push({

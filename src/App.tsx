@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { addDays, getTodayIsoDate, getWeekStartMonday } from '@/domain/dates';
 import type {
   AppState,
@@ -29,6 +29,7 @@ import { TabPanel } from '@/components/ui/tabs-nav';
 
 export function App() {
   const [state, setState] = useState<AppState>(() => loadState());
+  const generationNonceRef = useRef(0);
   const [weekStart, setWeekStart] = useState<string>(() =>
     getWeekStartMonday(getTodayIsoDate()),
   );
@@ -64,11 +65,26 @@ export function App() {
   };
 
   const handleGenerateWeek = () => {
-    const generated = generateWeekSchedule({
+    const previousSerialized = JSON.stringify(currentWeek.assignments);
+    const baseSeed = ((++generationNonceRef.current * 2654435761) ^ (Date.now() & 0xfffffff)) >>> 0;
+
+    let generated = generateWeekSchedule({
       state,
       weekStart,
       existingWeek: currentWeek,
+      seed: baseSeed,
     });
+
+    for (let offset = 1; offset <= 4; offset += 1) {
+      if (JSON.stringify(generated.assignments) !== previousSerialized) break;
+      generated = generateWeekSchedule({
+        state,
+        weekStart,
+        existingWeek: currentWeek,
+        seed: (baseSeed + offset) >>> 0,
+      });
+    }
+
     updateCurrentWeek(generated);
     setStatusBanner({
       tone: 'ok',
@@ -95,6 +111,7 @@ export function App() {
       state: sample,
       weekStart,
       existingWeek: sample.weeks[weekStart],
+      seed: ++generationNonceRef.current,
     });
     setState({
       ...sample,
@@ -138,6 +155,18 @@ export function App() {
 
   const handleUpdateScheduleRules = (scheduleRules: ScheduleRules) => {
     setState((prev) => ({ ...prev, scheduleRules }));
+  };
+
+  const handleUpdateTeamRulesOverride = (
+    teamId: string,
+    rulesOverride: Partial<ScheduleRules> | undefined,
+  ) => {
+    setState((prev) => ({
+      ...prev,
+      teams: prev.teams.map((t) =>
+        t.id === teamId ? { ...t, rulesOverride } : t,
+      ),
+    }));
   };
 
   const handleExportBackup = () => {
@@ -200,6 +229,7 @@ export function App() {
           onLoadSampleData={handleLoadSampleData}
           onUpdateWeek={updateCurrentWeek}
           onUpdateScheduleRules={handleUpdateScheduleRules}
+          onUpdateTeamRulesOverride={handleUpdateTeamRulesOverride}
         />
       </TabPanel>
 

@@ -4,63 +4,60 @@ import { generateWeekSchedule } from '@/engine/scheduler';
 import { generateWhatsAppText } from '../whatsapp';
 
 describe('generateWhatsAppText', () => {
-  it('gera mensagem formatada agrupada por dia com negrito WhatsApp, feriados e anotações', () => {
-    const state = createSampleState('2026-11-09');
-    state.holidays['2026-11-12'] = {
-      date: '2026-11-12',
+  it('gera mensagem no formato tabular por dia com blocos monoespaçados, plantão de domingo e folgas sem nota de iniciantes', () => {
+    const state = createSampleState('2026-11-23');
+    state.holidays['2026-11-26'] = {
+      date: '2026-11-26',
       name: 'Feriado Municipal',
       mode: 'off_all',
       shiftIds: [],
     };
-    const week = generateWeekSchedule({ state, weekStart: '2026-11-09' });
-    week.note = 'Atenção para abertura pontual às 08h.';
-    state.weeks['2026-11-09'] = week;
+    const week = generateWeekSchedule({ state, weekStart: '2026-11-23' });
+    // Simula cobertura manual em uma célula da segunda-feira
+    const camilaCell = week.assignments['emp-camila']?.['2026-11-23'];
+    if (camilaCell) {
+      week.assignments['emp-camila']['2026-11-23'] = {
+        ...camilaCell,
+        note: 'COBRE Allan',
+      };
+    }
+    state.weeks['2026-11-23'] = week;
 
     const text = generateWhatsAppText({
       state,
-      weekStart: '2026-11-09',
+      weekStart: '2026-11-23',
       groupBy: 'day',
-      includeNotes: true,
+      teamIdFilter: 'team-atendimento',
     });
 
-    expect(text).toContain('*Escala Semanal');
-    expect(text).toContain('*[Equipe Atendimento]*');
-    expect(text).toContain('09/11 a 15/11');
-    expect(text).toContain('*Quinta-feira (12/11)*');
-    expect(text).toContain('Feriado Municipal');
-    expect(text).toContain('Atenção para abertura pontual às 08h.');
+    expect(text).toContain('📡 *ESCALA EQUIPE ATENDIMENTO*');
+    expect(text).toContain('📆 *23/11/2026 a 29/11/2026*');
+    expect(text).toContain('📅 *SEGUNDA — 23/11/2026*');
+    expect(text).toContain('HORÁRIO         INTERVALO   AGENTE');
+    expect(text).toContain('Camila Ferreira ↪️ COBRE Allan');
+    expect(text).toContain('📅 *QUINTA — 26/11/2026* — FERIADO MUNICIPAL');
+    expect(text).toContain('📋 *SÁBADO — 28/11/2026*');
+    expect(text).toContain('HORÁRIO         AGENTE');
+    expect(text).toContain('🌙 *DOMINGO — PLANTÃO — 29/11/2026*');
+    expect(text).toContain('🌙 *Folga:*');
+    expect(text).not.toContain('iniciantes não atuam');
   });
 
-  it('gera mensagem formatada agrupada por colaborador destacando folga compensatória', () => {
-    const state = createSampleState('2026-11-09');
-    const week = generateWeekSchedule({ state, weekStart: '2026-11-09' });
-    state.weeks['2026-11-09'] = week;
+  it('exporta apenas a equipe selecionada no modo por colaborador', () => {
+    const state = createSampleState('2026-11-23');
+    const week = generateWeekSchedule({ state, weekStart: '2026-11-23' });
+    state.weeks['2026-11-23'] = week;
 
     const text = generateWhatsAppText({
       state,
-      weekStart: '2026-11-09',
-      groupBy: 'employee',
-    });
-
-    expect(text).toContain('*Camila Ferreira*');
-    expect(text).toContain('Folga (Dom.)');
-  });
-
-  it('exporta apenas a equipe selecionada quando teamIdFilter é informado', () => {
-    const state = createSampleState('2026-11-09');
-    const week = generateWeekSchedule({ state, weekStart: '2026-11-09' });
-    state.weeks['2026-11-09'] = week;
-
-    const text = generateWhatsAppText({
-      state,
-      weekStart: '2026-11-09',
+      weekStart: '2026-11-23',
       groupBy: 'employee',
       teamIdFilter: 'team-atendimento',
     });
 
-    expect(text).toContain('*[Equipe Atendimento]*');
+    expect(text).toContain('📡 *ESCALA EQUIPE ATENDIMENTO*');
     expect(text).toContain('*Camila Ferreira*');
-    expect(text).not.toContain('*[Equipe Suporte]*');
+    expect(text).toContain('Folga (Dom.)');
     expect(text).not.toContain('Rafael Mendes');
   });
 });

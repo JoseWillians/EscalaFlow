@@ -226,14 +226,28 @@ describe('generateWeekSchedule', () => {
     expect(generated.note).toBe('Manter nota');
   });
 
-  it('é determinístico para entradas idênticas e evita interjornada < 11h na geração automática', () => {
+  it('é determinístico para entradas e seed idênticos e evita interjornada < 11h na geração automática', () => {
     const state = createSampleState('2026-11-09');
-    const run1 = generateWeekSchedule({ state, weekStart: '2026-11-09' });
-    const run2 = generateWeekSchedule({ state, weekStart: '2026-11-09' });
+    const run1 = generateWeekSchedule({ state, weekStart: '2026-11-09', seed: 42 });
+    const run2 = generateWeekSchedule({ state, weekStart: '2026-11-09', seed: 42 });
 
     expect(run1).toEqual(run2);
     const issues = validateWeekSchedule({ state, weekStart: '2026-11-09', week: run1 });
     expect(issues.filter((i) => i.code === 'INTERJORNADA')).toHaveLength(0);
+  });
+
+  it('gera distribuições variadas quando recebe seeds diferentes sem violar nenhuma regra', () => {
+    const state = createSampleState('2026-11-09');
+    const serializedRuns = new Set<string>();
+
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const week = generateWeekSchedule({ state, weekStart: '2026-11-09', seed });
+      serializedRuns.add(JSON.stringify(week.assignments));
+      const issues = validateWeekSchedule({ state, weekStart: '2026-11-09', week });
+      expect(issues.filter((i) => i.severity !== 'info')).toHaveLength(0);
+    }
+
+    expect(serializedRuns.size).toBeGreaterThanOrEqual(3);
   });
 
   it('permite configurar quantidade de pessoas no domingo (0 ou 3), turnos escolhidos e desativar regras via caixas de seleção', () => {
@@ -245,7 +259,9 @@ describe('generateWeekSchedule', () => {
       enforceNightShiftMonthlyRotation: false,
       avoidConsecutiveSundays: false,
       warnInterjornadaUnder11h: false,
+      saturdayStaffCount: null,
       sundayStaffCount: 3,
+      holidayStaffCount: null,
       selectedShiftIdsForGeneration: ['shift-wk-08-18', 'shift-sat-08-12', 'shift-sun-08-18'],
     };
 
@@ -275,6 +291,109 @@ describe('generateWeekSchedule', () => {
     }
 
     // Validador respeita regras desativadas
+    const issues = validateWeekSchedule({ state, weekStart: '2026-11-09', week });
+    expect(issues.filter((i) => i.severity !== 'info')).toHaveLength(0);
+  });
+
+  it('respeita quantidade configurada de funcionários para sábados e feriados com expediente', () => {
+    const state = createSampleState('2026-11-09');
+    state.holidays['2026-11-12'] = {
+      date: '2026-11-12',
+      name: 'Feriado Especial',
+      mode: 'special',
+      shiftIds: ['shift-sun-08-18'],
+    };
+    state.scheduleRules = {
+      ...state.scheduleRules,
+      saturdayStaffCount: 3,
+      sundayStaffCount: 2,
+      holidayStaffCount: 2,
+    };
+
+    const week = generateWeekSchedule({ state, weekStart: '2026-11-09' });
+    const days = getWeekDays('2026-11-09');
+    const thursdayHoliday = '2026-11-12';
+    const saturdayDate = days[5];
+    const sundayDate = days[6];
+
+    for (const team of state.teams) {
+      const teamEmps = state.employees.filter((e) => e.teamId === team.id);
+      const satWorkers = teamEmps.filter(
+        (e) => week.assignments[e.id]?.[saturdayDate]?.kind === 'SHIFT',
+      );
+      const sunWorkers = teamEmps.filter(
+        (e) => week.assignments[e.id]?.[sundayDate]?.kind === 'SHIFT',
+      );
+      const holidayWorkers = teamEmps.filter(
+        (e) => week.assignments[e.id]?.[thursdayHoliday]?.kind === 'SHIFT',
+      );
+
+      expect(satWorkers).toHaveLength(3);
+      expect(sunWorkers).toHaveLength(2);
+      expect(holidayWorkers).toHaveLength(2);
+      for (const hw of holidayWorkers) {
+        expect(hw.isBeginner).toBe(false);
+      }
+    }
+
+    const issues = validateWeekSchedule({ state, weekStart: '2026-11-09', week });
+    expect(issues.filter((i) => i.severity !== 'info')).toHaveLength(0);
+  });
+
+  it('aplica regra específica da equipe com prioridade sobre a regra geral', () => {
+    const state = createSampleState('2026-11-09');
+    // Regra geral: 2 no domingo, sábado livre (todos)
+    state.scheduleRules = {
+      ...state.scheduleRules,
+      saturdayStaffCount: null,
+      sundayStaffCount: 2,
+    };
+    // Regra específica da Equipe Suporte (sobrescreve a geral)
+    state.teams = state.teams.map((t) =>
+      t.id === 'team-suporte'
+        ? {
+            ...t,
+            rulesOverride: {
+              saturdayStaffCount: 2,
+              sundayStaffCount: 1,
+              selectedShiftIdsForGeneration: [
+                'shift-wk-08-18',
+                'shift-sat-08-12',
+                'shift-sun-08-18',
+              ],
+            },
+          }
+        : t,
+    );
+
+    const week = generateWeekSchedule({ state, weekStart: '2026-11-09' });
+    const days = getWeekDays('2026-11-09');
+    const saturdayDate = days[5];
+    const sundayDate = days[6];
+
+    // Equipe Atendimento segue a regra geral (2 no domingo, 0 folgas no sábado exceto quem folga dom.)
+    const atendimentoEmps = state.employees.filter((e) => e.teamId === 'team-atendimento');
+    expect(
+      atendimentoEmps.filter((e) => week.assignments[e.id]?.[sundayDate]?.kind === 'SHIFT'),
+    ).toHaveLength(2);
+
+    // Equipe Suporte segue a regra específica (1 no domingo, 2 no sábado e apenas turnos selecionados)
+    const suporteEmps = state.employees.filter((e) => e.teamId === 'team-suporte');
+    expect(
+      suporteEmps.filter((e) => week.assignments[e.id]?.[sundayDate]?.kind === 'SHIFT'),
+    ).toHaveLength(1);
+    expect(
+      suporteEmps.filter((e) => week.assignments[e.id]?.[saturdayDate]?.kind === 'SHIFT'),
+    ).toHaveLength(2);
+    for (const emp of suporteEmps) {
+      for (const d of days) {
+        const cell = week.assignments[emp.id]?.[d];
+        if (cell?.kind === 'SHIFT') {
+          expect(['shift-wk-08-18', 'shift-sat-08-12', 'shift-sun-08-18']).toContain(cell.shiftId);
+        }
+      }
+    }
+
     const issues = validateWeekSchedule({ state, weekStart: '2026-11-09', week });
     expect(issues.filter((i) => i.severity !== 'info')).toHaveLength(0);
   });

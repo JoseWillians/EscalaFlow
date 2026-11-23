@@ -79,15 +79,40 @@ test.describe('EscalaFlow — Fluxos Críticos', () => {
       await expect(julianaRow.locator('td').nth(colIdx)).not.toContainText('Folga');
     }
 
-    // 3. Abre painel Regras e Turnos, altera quantidade de domingo para 3, gera e restaura para 2
+    // Regerar escala automaticamente deve variar a distribuição sem quebrar regras
+    const initialAtendimentoText = await page
+      .getByTestId('grid-team-team-atendimento')
+      .locator('tbody')
+      .innerText();
+    await page.getByTestId('generate-schedule-btn').click();
+    const regeneratedAtendimentoText = await page
+      .getByTestId('grid-team-team-atendimento')
+      .locator('tbody')
+      .innerText();
+    expect(regeneratedAtendimentoText).not.toBe(initialAtendimentoText);
+    await expect(atendimentoSundayCells.filter({ hasText: '08:00 às 18:00 (Dom)' })).toHaveCount(2);
+
+    // 3. Abre painel Regras e Turnos, testa override exclusivo por equipe (prioridade sobre geral) e restaura
     await page.getByTestId('toggle-rules-panel-btn').click();
     await expect(page.getByTestId('schedule-rules-panel')).toBeVisible();
-    await page.getByTestId('sunday-staff-count-input').fill('3');
+    await expect(page.getByTestId('holiday-staff-count-input')).toBeVisible();
+    await page.getByTestId('rules-scope-team-suporte').click();
+    await page.getByTestId('sunday-staff-count-input').fill('1');
+    await page.getByTestId('saturday-staff-count-input').fill('2');
     await page.getByTestId('generate-schedule-btn').click();
-    await expect(atendimentoSundayCells.filter({ hasText: '08:00 às 18:00 (Dom)' })).toHaveCount(3);
-    await page.getByTestId('reset-rules-btn').click();
-    await page.getByTestId('generate-schedule-btn').click();
+    // Atendimento mantém regra geral (2 no domingo), Suporte obedece regra própria (1 no domingo, 2 no sábado)
     await expect(atendimentoSundayCells.filter({ hasText: '08:00 às 18:00 (Dom)' })).toHaveCount(2);
+    const suporteSundayCells = page
+      .getByTestId('grid-team-team-suporte')
+      .locator('tbody tr td:last-child');
+    await expect(suporteSundayCells.filter({ hasText: '08:00 às 18:00 (Dom)' })).toHaveCount(1);
+    const suporteSaturdayCells = page
+      .getByTestId('grid-team-team-suporte')
+      .locator('tbody tr td:nth-child(7)');
+    await expect(suporteSaturdayCells.filter({ hasText: /^Folga$/ })).toHaveCount(3);
+    await page.getByTestId('clear-team-override-btn').click();
+    await page.getByTestId('generate-schedule-btn').click();
+    await expect(suporteSundayCells.filter({ hasText: '08:00 às 18:00 (Dom)' })).toHaveCount(2);
 
     // 4. Troca de turno via modal com validação em tempo real + confirmação de exceção + histórico
     await page.getByTestId('open-swap-modal-btn').click();
@@ -130,8 +155,9 @@ test.describe('EscalaFlow — Fluxos Críticos', () => {
     await page.getByRole('tab', { name: /Exportar/i }).click();
     await page.getByTestId('export-team-select').selectOption('team-atendimento');
     const whatsappBox = page.getByTestId('whatsapp-textarea');
-    await expect(whatsappBox).toContainText('*[Equipe Atendimento]*');
-    await expect(whatsappBox).not.toContainText('*[Equipe Suporte]*');
+    await expect(whatsappBox).toContainText('📡 *ESCALA EQUIPE ATENDIMENTO*');
+    await expect(whatsappBox).toContainText('HORÁRIO         INTERVALO   AGENTE');
+    await expect(whatsappBox).not.toContainText('ESCALA EQUIPE SUPORTE');
 
     const [xlsxDownload] = await Promise.all([
       page.waitForEvent('download'),

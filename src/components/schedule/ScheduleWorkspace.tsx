@@ -43,6 +43,10 @@ export interface ScheduleWorkspaceProps {
   onLoadSampleData: () => void;
   onUpdateWeek: (nextWeek: WeekSchedule) => void;
   onUpdateScheduleRules: (rules: ScheduleRules) => void;
+  onUpdateTeamRulesOverride: (
+    teamId: string,
+    override: Partial<ScheduleRules> | undefined,
+  ) => void;
 }
 
 export function ScheduleWorkspace({
@@ -54,6 +58,7 @@ export function ScheduleWorkspace({
   onLoadSampleData,
   onUpdateWeek,
   onUpdateScheduleRules,
+  onUpdateTeamRulesOverride,
 }: ScheduleWorkspaceProps) {
   const [viewMode, setViewMode] = useState<'employee' | 'shift'>('employee');
   const [teamFilter, setTeamFilter] = useState<string>('all');
@@ -296,9 +301,11 @@ export function ScheduleWorkspace({
 
       {rulesOpen && (
         <ScheduleRulesPanel
-          rules={getScheduleRules(state)}
+          generalRules={getScheduleRules(state)}
+          teams={state.teams}
           shifts={state.shifts}
-          onChange={onUpdateScheduleRules}
+          onChangeGeneral={onUpdateScheduleRules}
+          onChangeTeamOverride={onUpdateTeamRulesOverride}
         />
       )}
 

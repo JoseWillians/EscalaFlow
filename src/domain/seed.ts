@@ -247,7 +247,6 @@ export function createSampleState(referenceDate: string = getTodayIsoDate()): Ap
         swaps: [],
       },
     },
-    pinnedNotes:
-      'Regra operacional: iniciantes não atuam em fechamento (12:00–22:00), domingos ou feriados com expediente. Apenas quem trabalha no domingo folga no meio da semana.',
+    pinnedNotes: '',
   };
 }

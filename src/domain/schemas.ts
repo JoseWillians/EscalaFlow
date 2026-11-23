@@ -11,11 +11,39 @@ export const IsoDateSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Formato de data inválido (use YYYY-MM-DD)');
 
+export const ScheduleRulesSchema = z.object({
+  enforceBeginnerRestrictions: z.boolean().default(true),
+  enforceSundayCompOff: z.boolean().default(true),
+  noMidweekOffWithoutSunday: z.boolean().default(true),
+  enforceNightShiftMonthlyRotation: z.boolean().default(true),
+  avoidConsecutiveSundays: z.boolean().default(true),
+  warnInterjornadaUnder11h: z.boolean().default(true),
+  saturdayStaffCount: z.number().int().min(0).max(50).nullable().default(null),
+  sundayStaffCount: z.number().int().min(0).max(50).default(2),
+  holidayStaffCount: z.number().int().min(0).max(50).nullable().default(null),
+  selectedShiftIdsForGeneration: z.array(z.string()).default([]),
+});
+export type ScheduleRules = z.infer<typeof ScheduleRulesSchema>;
+
+export const DEFAULT_SCHEDULE_RULES: ScheduleRules = {
+  enforceBeginnerRestrictions: true,
+  enforceSundayCompOff: true,
+  noMidweekOffWithoutSunday: true,
+  enforceNightShiftMonthlyRotation: true,
+  avoidConsecutiveSundays: true,
+  warnInterjornadaUnder11h: true,
+  saturdayStaffCount: null,
+  sundayStaffCount: 2,
+  holidayStaffCount: null,
+  selectedShiftIdsForGeneration: [],
+};
+
 export const TeamSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1, 'Informe o nome da equipe'),
   description: z.string().optional(),
   active: z.boolean().default(true),
+  rulesOverride: ScheduleRulesSchema.partial().optional(),
 });
 export type Team = z.infer<typeof TeamSchema>;
 
@@ -111,29 +139,6 @@ export type WeekSchedule = z.infer<typeof WeekScheduleSchema>;
 
 export const SundayCompModeSchema = z.enum(['same_week', 'next_week']);
 export type SundayCompMode = z.infer<typeof SundayCompModeSchema>;
-
-export const ScheduleRulesSchema = z.object({
-  enforceBeginnerRestrictions: z.boolean().default(true),
-  enforceSundayCompOff: z.boolean().default(true),
-  noMidweekOffWithoutSunday: z.boolean().default(true),
-  enforceNightShiftMonthlyRotation: z.boolean().default(true),
-  avoidConsecutiveSundays: z.boolean().default(true),
-  warnInterjornadaUnder11h: z.boolean().default(true),
-  sundayStaffCount: z.number().int().min(0).max(50).default(2),
-  selectedShiftIdsForGeneration: z.array(z.string()).default([]),
-});
-export type ScheduleRules = z.infer<typeof ScheduleRulesSchema>;
-
-export const DEFAULT_SCHEDULE_RULES: ScheduleRules = {
-  enforceBeginnerRestrictions: true,
-  enforceSundayCompOff: true,
-  noMidweekOffWithoutSunday: true,
-  enforceNightShiftMonthlyRotation: true,
-  avoidConsecutiveSundays: true,
-  warnInterjornadaUnder11h: true,
-  sundayStaffCount: 2,
-  selectedShiftIdsForGeneration: [],
-};
 
 export const AppStateSchema = z.object({
   version: z.literal(1),

@@ -1,7 +1,9 @@
+import { useEffect, useState } from 'react';
 import { Lock, Unlock } from 'lucide-react';
 import { formatShortDateBr, getWeekdayShortPt } from '@/domain/dates';
 import type { CellAssignment, Employee, ShiftTemplate } from '@/domain/schemas';
 import { Button } from '@/components/ui/button';
+import { FieldLabel, TextInput } from '@/components/ui/form-controls';
 import { PopoverPanel } from '@/components/ui/popover-panel';
 
 export interface CellEditPopoverProps {
@@ -28,6 +30,14 @@ export function CellEditPopover({
   onSelectCell,
 }: CellEditPopoverProps) {
   const locked = Boolean(cell?.locked);
+  const [noteText, setNoteText] = useState(cell?.note ?? '');
+
+  useEffect(() => {
+    if (open) {
+      setNoteText(cell?.note ?? '');
+    }
+  }, [open, cell?.note]);
+
   const otherShifts = allActiveShifts.filter(
     (s) => !applicableShifts.some((app) => app.id === s.id),
   );
@@ -37,6 +47,7 @@ export function CellEditPopover({
       kind: 'SHIFT',
       shiftId,
       locked,
+      note: noteText.trim() || undefined,
     });
     onOpenChange(false);
   };
@@ -45,6 +56,7 @@ export function CellEditPopover({
     onSelectCell({
       kind,
       locked,
+      note: noteText.trim() || undefined,
     });
     onOpenChange(false);
   };
@@ -53,7 +65,16 @@ export function CellEditPopover({
     onSelectCell({
       ...(cell ?? { kind: 'OFF' }),
       locked: !locked,
+      note: noteText.trim() || undefined,
     });
+  };
+
+  const saveNoteOnly = () => {
+    onSelectCell({
+      ...(cell ?? { kind: 'OFF', locked: false }),
+      note: noteText.trim() || undefined,
+    });
+    onOpenChange(false);
   };
 
   return (
@@ -122,7 +143,7 @@ export function CellEditPopover({
             <p className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
               Outros turnos
             </p>
-            <div className="grid max-h-28 gap-1 overflow-y-auto pr-1">
+            <div className="grid max-h-24 gap-1 overflow-y-auto pr-1">
               {otherShifts.map((shift) => (
                 <button
                   key={shift.id}
@@ -140,6 +161,24 @@ export function CellEditPopover({
             </div>
           </div>
         )}
+
+        <div className="space-y-1.5 border-t border-slate-100 pt-2">
+          <FieldLabel htmlFor={`cell-note-${employee.id}-${date}`}>
+            Cobertura / observação (opcional)
+          </FieldLabel>
+          <div className="flex gap-1.5">
+            <TextInput
+              id={`cell-note-${employee.id}-${date}`}
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+              placeholder="Ex.: COBRE Allan"
+              className="h-8 text-xs"
+            />
+            <Button tone="outline" size="sm" onClick={saveNoteOnly}>
+              Salvar
+            </Button>
+          </div>
+        </div>
 
         <div className="grid grid-cols-2 gap-1.5 border-t border-slate-100 pt-2">
           <Button tone="outline" size="sm" onClick={() => assignKind('OFF')}>

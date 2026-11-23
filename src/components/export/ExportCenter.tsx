@@ -29,7 +29,7 @@ export function ExportCenter({ state, weekStart, week }: ExportCenterProps) {
   const [selectedTeamId, setSelectedTeamId] = useState<string>(
     () => activeTeams[0]?.id ?? '',
   );
-  const [includeNotes, setIncludeNotes] = useState(true);
+  const [includeNotes, setIncludeNotes] = useState(false);
   const [copied, setCopied] = useState(false);
   const [pngBusy, setPngBusy] = useState(false);
   const [xlsxBusy, setXlsxBusy] = useState(false);

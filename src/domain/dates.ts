@@ -87,6 +87,11 @@ export function formatShortDateBr(dateStr: string): string {
   return `${d}/${m}`;
 }
 
+export function formatFullDateBr(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-');
+  return `${d}/${m}/${y}`;
+}
+
 export function getWeekdayShortPt(dateStr: string): string {
   return WEEKDAY_SHORT_PT[getDayOfWeek(dateStr)];
 }

@@ -1,17 +1,21 @@
-import { RotateCcw, SlidersHorizontal } from 'lucide-react';
+import { useState } from 'react';
+import { Layers, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import {
   DEFAULT_SCHEDULE_RULES,
   type ScheduleRules,
   type ShiftTemplate,
+  type Team,
 } from '@/domain/schemas';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { FieldLabel, TextInput } from '@/components/ui/form-controls';
 
 export interface ScheduleRulesPanelProps {
-  rules: ScheduleRules;
+  generalRules: ScheduleRules;
+  teams: Team[];
   shifts: ShiftTemplate[];
-  onChange: (nextRules: ScheduleRules) => void;
+  onChangeGeneral: (nextRules: ScheduleRules) => void;
+  onChangeTeamOverride: (teamId: string, override: Partial<ScheduleRules> | undefined) => void;
 }
 
 const RULE_CHECKBOXES: Array<{
@@ -59,37 +63,60 @@ const RULE_CHECKBOXES: Array<{
   },
 ];
 
-export function ScheduleRulesPanel({ rules, shifts, onChange }: ScheduleRulesPanelProps) {
+export function ScheduleRulesPanel({
+  generalRules,
+  teams,
+  shifts,
+  onChangeGeneral,
+  onChangeTeamOverride,
+}: ScheduleRulesPanelProps) {
+  const activeTeams = teams.filter((t) => t.active);
+  const [scope, setScope] = useState<'general' | string>('general');
+
+  const selectedTeam =
+    scope !== 'general' ? activeTeams.find((t) => t.id === scope) : undefined;
+  const isTeamScope = Boolean(selectedTeam);
+
+  const effectiveRules: ScheduleRules = selectedTeam?.rulesOverride
+    ? { ...generalRules, ...selectedTeam.rulesOverride }
+    : generalRules;
+
   const activeShifts = shifts.filter((s) => s.active);
-  const usingAllShifts = rules.selectedShiftIdsForGeneration.length === 0;
+  const usingAllShifts = effectiveRules.selectedShiftIdsForGeneration.length === 0;
+
+  const applyPatch = (patch: Partial<ScheduleRules>) => {
+    if (selectedTeam) {
+      onChangeTeamOverride(selectedTeam.id, {
+        ...selectedTeam.rulesOverride,
+        ...patch,
+      });
+    } else {
+      onChangeGeneral({
+        ...generalRules,
+        ...patch,
+      });
+    }
+  };
 
   const toggleRule = (key: (typeof RULE_CHECKBOXES)[number]['key']) => {
-    onChange({
-      ...rules,
-      [key]: !rules[key],
-    });
+    applyPatch({ [key]: !effectiveRules[key] });
   };
 
   const toggleShiftSelection = (shiftId: string) => {
     if (usingAllShifts) {
-      // Ao desmarcar/clicar partindo de "todos", passa a selecionar apenas os demais ou só este
       const allIds = activeShifts.map((s) => s.id);
-      onChange({
-        ...rules,
+      applyPatch({
         selectedShiftIdsForGeneration: allIds.filter((id) => id !== shiftId),
       });
       return;
     }
 
-    const exists = rules.selectedShiftIdsForGeneration.includes(shiftId);
+    const exists = effectiveRules.selectedShiftIdsForGeneration.includes(shiftId);
     const next = exists
-      ? rules.selectedShiftIdsForGeneration.filter((id) => id !== shiftId)
-      : [...rules.selectedShiftIdsForGeneration, shiftId];
+      ? effectiveRules.selectedShiftIdsForGeneration.filter((id) => id !== shiftId)
+      : [...effectiveRules.selectedShiftIdsForGeneration, shiftId];
 
-    onChange({
-      ...rules,
-      selectedShiftIdsForGeneration: next,
-    });
+    applyPatch({ selectedShiftIdsForGeneration: next });
   };
 
   return (
@@ -105,20 +132,93 @@ export function ScheduleRulesPanel({ rules, shifts, onChange }: ScheduleRulesPan
               Regras e Turnos da Geração Automática
             </h2>
             <p className="text-xs text-slate-500">
-              Marque quais regras aplicar, defina quantas pessoas trabalham no domingo e escolha os turnos desejados.
+              Configure a regra geral ou personalize por equipe (regras da equipe têm prioridade sobre a geral).
             </p>
           </div>
         </div>
-        <Button
-          tone="ghost"
-          size="sm"
-          onClick={() => onChange({ ...DEFAULT_SCHEDULE_RULES })}
-          data-testid="reset-rules-btn"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-          <span>Restaurar padrão</span>
-        </Button>
+
+        {isTeamScope && selectedTeam ? (
+          selectedTeam.rulesOverride ? (
+            <Button
+              tone="outline"
+              size="sm"
+              onClick={() => onChangeTeamOverride(selectedTeam.id, undefined)}
+              data-testid="clear-team-override-btn"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              <span>Usar regra geral</span>
+            </Button>
+          ) : null
+        ) : (
+          <Button
+            tone="ghost"
+            size="sm"
+            onClick={() => onChangeGeneral({ ...DEFAULT_SCHEDULE_RULES })}
+            data-testid="reset-rules-btn"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            <span>Restaurar padrão</span>
+          </Button>
+        )}
       </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-1.5 border-b border-slate-100 pb-3">
+        <button
+          type="button"
+          onClick={() => setScope('general')}
+          data-testid="rules-scope-general"
+          className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+            !isTeamScope
+              ? 'border-blue-600 bg-blue-50 text-blue-900'
+              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+          }`}
+        >
+          <span>Geral (Padrão)</span>
+        </button>
+
+        {activeTeams.map((team) => {
+          const active = scope === team.id;
+          const customized = Boolean(team.rulesOverride);
+          return (
+            <button
+              key={team.id}
+              type="button"
+              onClick={() => setScope(team.id)}
+              data-testid={`rules-scope-${team.id}`}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                active
+                  ? 'border-blue-600 bg-blue-50 text-blue-900'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <Layers className="h-3.5 w-3.5" />
+              <span>{team.name}</span>
+              {customized && <Badge tone="info">Personalizada</Badge>}
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedTeam && (
+        <div
+          className={`mt-3 rounded-md border px-3 py-2 text-xs ${
+            selectedTeam.rulesOverride
+              ? 'border-blue-200 bg-blue-50/70 text-blue-950'
+              : 'border-slate-200 bg-slate-50 text-slate-700'
+          }`}
+          data-testid="team-scope-banner"
+        >
+          {selectedTeam.rulesOverride ? (
+            <span>
+              <strong>{selectedTeam.name}</strong> está usando regras próprias (prioridade máxima sobre a configuração geral).
+            </span>
+          ) : (
+            <span>
+              <strong>{selectedTeam.name}</strong> está herdando a regra geral. Altere qualquer opção abaixo para criar uma regra exclusiva desta equipe.
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="mt-4 grid gap-5 lg:grid-cols-12">
         <div className="space-y-2.5 lg:col-span-7">
@@ -133,7 +233,7 @@ export function ScheduleRulesPanel({ rules, shifts, onChange }: ScheduleRulesPan
               >
                 <input
                   type="checkbox"
-                  checked={rules[item.key]}
+                  checked={effectiveRules[item.key]}
                   onChange={() => toggleRule(item.key)}
                   className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
                   data-testid={`rule-checkbox-${item.key}`}
@@ -148,29 +248,76 @@ export function ScheduleRulesPanel({ rules, shifts, onChange }: ScheduleRulesPan
         </div>
 
         <div className="space-y-4 lg:col-span-5">
-          <div className="rounded-md border border-slate-200 bg-slate-50/60 p-3">
-            <FieldLabel htmlFor="sunday-staff-count">
-              Quantidade de pessoas aos domingos (por equipe)
-            </FieldLabel>
-            <div className="mt-1.5 flex items-center gap-3">
-              <TextInput
-                id="sunday-staff-count"
-                type="number"
-                min={0}
-                max={50}
-                value={rules.sundayStaffCount}
-                onChange={(e) =>
-                  onChange({
-                    ...rules,
-                    sundayStaffCount: Math.max(0, Math.min(50, Number(e.target.value) || 0)),
-                  })
-                }
-                className="w-24 font-mono"
-                data-testid="sunday-staff-count-input"
-              />
-              <span className="text-xs text-slate-500">
-                Use <code className="font-mono">0</code> se não houver expediente aos domingos.
-              </span>
+          <div className="space-y-3 rounded-md border border-slate-200 bg-slate-50/60 p-3">
+            <div>
+              <p className="text-xs font-semibold text-slate-800">
+                Quantidade {selectedTeam ? `em ${selectedTeam.name}` : 'por equipe'}: finais de semana e feriados
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Deixe Sábado/Feriado em branco para usar o modo automático (ou informe 0 para sem expediente).
+              </p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <FieldLabel htmlFor="saturday-staff-count">Sábados</FieldLabel>
+                <TextInput
+                  id="saturday-staff-count"
+                  type="number"
+                  min={0}
+                  max={50}
+                  placeholder="Todos"
+                  value={effectiveRules.saturdayStaffCount ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    applyPatch({
+                      saturdayStaffCount:
+                        raw === '' ? null : Math.max(0, Math.min(50, Number(raw) || 0)),
+                    });
+                  }}
+                  className="mt-1 font-mono"
+                  data-testid="saturday-staff-count-input"
+                />
+              </div>
+
+              <div>
+                <FieldLabel htmlFor="sunday-staff-count">Domingos</FieldLabel>
+                <TextInput
+                  id="sunday-staff-count"
+                  type="number"
+                  min={0}
+                  max={50}
+                  value={effectiveRules.sundayStaffCount}
+                  onChange={(e) =>
+                    applyPatch({
+                      sundayStaffCount: Math.max(0, Math.min(50, Number(e.target.value) || 0)),
+                    })
+                  }
+                  className="mt-1 font-mono"
+                  data-testid="sunday-staff-count-input"
+                />
+              </div>
+
+              <div>
+                <FieldLabel htmlFor="holiday-staff-count">Feriados</FieldLabel>
+                <TextInput
+                  id="holiday-staff-count"
+                  type="number"
+                  min={0}
+                  max={50}
+                  placeholder="Auto"
+                  value={effectiveRules.holidayStaffCount ?? ''}
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    applyPatch({
+                      holidayStaffCount:
+                        raw === '' ? null : Math.max(0, Math.min(50, Number(raw) || 0)),
+                    });
+                  }}
+                  className="mt-1 font-mono"
+                  data-testid="holiday-staff-count-input"
+                />
+              </div>
             </div>
           </div>
 
@@ -186,7 +333,7 @@ export function ScheduleRulesPanel({ rules, shifts, onChange }: ScheduleRulesPan
                   <Button
                     tone="ghost"
                     size="sm"
-                    onClick={() => onChange({ ...rules, selectedShiftIdsForGeneration: [] })}
+                    onClick={() => applyPatch({ selectedShiftIdsForGeneration: [] })}
                   >
                     Usar todos os ativos
                   </Button>
@@ -197,7 +344,8 @@ export function ScheduleRulesPanel({ rules, shifts, onChange }: ScheduleRulesPan
             <div className="mt-2 grid max-h-40 gap-1.5 overflow-y-auto pr-1 text-xs">
               {activeShifts.map((shift) => {
                 const checked =
-                  usingAllShifts || rules.selectedShiftIdsForGeneration.includes(shift.id);
+                  usingAllShifts ||
+                  effectiveRules.selectedShiftIdsForGeneration.includes(shift.id);
                 return (
                   <label
                     key={shift.id}

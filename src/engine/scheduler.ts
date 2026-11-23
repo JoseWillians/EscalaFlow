@@ -29,6 +29,20 @@ function getWeekSeed(weekStart: string): number {
   return Math.floor(dt.getTime() / (7 * 24 * 60 * 60 * 1000));
 }
 
+function deterministicNoise(seed: number, key: string): number {
+  let h = (2166136261 ^ seed) >>> 0;
+  for (let i = 0; i < key.length; i += 1) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
 function countWeekShifts(
   assignments: Record<string, Record<string, CellAssignment>>,
   employeeId: string,
@@ -117,12 +131,14 @@ function wouldViolateInterjornada(params: {
 
 function pickBestCompOffDay(params: {
   employeeId: string;
+  teamId: string;
   weekdays: string[];
   assignments: Record<string, Record<string, CellAssignment>>;
   state: AppState;
   teamEmployees: Employee[];
+  effectiveSeed: number;
 }): string | undefined {
-  const { employeeId, weekdays, assignments, state, teamEmployees } = params;
+  const { employeeId, teamId, weekdays, assignments, state, teamEmployees, effectiveSeed } = params;
 
   const candidates = weekdays.filter((date) => {
     const cell = assignments[employeeId]?.[date];
@@ -130,24 +146,29 @@ function pickBestCompOffDay(params: {
   });
   if (candidates.length === 0) return undefined;
 
+  const surplus = (date: string) => {
+    const available = teamEmployees.filter(
+      (e) => assignments[e.id]?.[date] === undefined,
+    ).length;
+    const needed = getApplicableShiftsForDate(state, date, true, teamId).reduce(
+      (acc, s) => acc + s.targetHeadcount,
+      0,
+    );
+    return available - needed;
+  };
+
   candidates.sort((a, b) => {
     const aIsSat = getDayOfWeek(a) === 6 ? 1 : 0;
     const bIsSat = getDayOfWeek(b) === 6 ? 1 : 0;
     if (aIsSat !== bIsSat) return aIsSat - bIsSat;
 
-    const surplus = (date: string) => {
-      const available = teamEmployees.filter(
-        (e) => assignments[e.id]?.[date] === undefined,
-      ).length;
-      const needed = getApplicableShiftsForDate(state, date, true).reduce(
-        (acc, s) => acc + s.targetHeadcount,
-        0,
-      );
-      return available - needed;
-    };
+    const aHasSurplus = surplus(a) >= 0 ? 0 : 1;
+    const bHasSurplus = surplus(b) >= 0 ? 0 : 1;
+    if (aHasSurplus !== bHasSurplus) return aHasSurplus - bHasSurplus;
 
-    const diff = surplus(b) - surplus(a);
-    if (diff !== 0) return diff;
+    const noiseA = deterministicNoise(effectiveSeed, `comp:${employeeId}:${a}`);
+    const noiseB = deterministicNoise(effectiveSeed, `comp:${employeeId}:${b}`);
+    if (noiseA !== noiseB) return noiseA - noiseB;
     return a.localeCompare(b);
   });
 
@@ -156,23 +177,25 @@ function pickBestCompOffDay(params: {
 
 function scheduleTeamWeek(params: {
   state: AppState;
+  teamId: string;
   rules: ScheduleRules;
   weekStart: string;
   teamEmployees: Employee[];
   assignments: Record<string, Record<string, CellAssignment>>;
   shiftsById: Map<string, ShiftTemplate>;
   prevSundayWorkers: Set<string>;
-  weekSeed: number;
+  effectiveSeed: number;
 }): void {
   const {
     state,
+    teamId,
     rules,
     weekStart,
     teamEmployees,
     assignments,
     shiftsById,
     prevSundayWorkers,
-    weekSeed,
+    effectiveSeed,
   } = params;
 
   if (teamEmployees.length === 0) return;
@@ -180,7 +203,6 @@ function scheduleTeamWeek(params: {
   const days = getWeekDays(weekStart);
   const weekdays = days.slice(0, 6);
   const sundayDate = days[6];
-  const empIndexMap = new Map(teamEmployees.map((e, idx) => [e.id, idx]));
 
   // Modo semana seguinte: aloca Folga (Dom.) nesta semana para quem trabalhou no domingo anterior
   if (rules.enforceSundayCompOff && state.sundayCompMode === 'next_week') {
@@ -196,10 +218,12 @@ function scheduleTeamWeek(params: {
 
       const compDay = pickBestCompOffDay({
         employeeId: emp.id,
+        teamId,
         weekdays,
         assignments,
         state,
         teamEmployees,
+        effectiveSeed,
       });
       if (compDay) {
         assignments[emp.id][compDay] = { kind: 'COMP_OFF', locked: false };
@@ -207,11 +231,11 @@ function scheduleTeamWeek(params: {
     }
   }
 
-  // Passo A: Escalar o Domingo conforme sundayStaffCount configurado pelo líder
+  // Passo A: Escalar o Domingo conforme sundayStaffCount configurado (equipe ou geral)
   const sundayShifts =
     rules.sundayStaffCount === 0 && !state.holidays[sundayDate]
       ? []
-      : getApplicableShiftsForDate(state, sundayDate, true);
+      : getApplicableShiftsForDate(state, sundayDate, true, teamId);
   const sundayMonthKey = getMonthKey(sundayDate);
   const sundayMonthMetrics = getSavedMonthMetricsExcludingWeek(state, sundayMonthKey, weekStart);
 
@@ -247,13 +271,13 @@ function scheduleTeamWeek(params: {
         const sunB = sundayMonthMetrics.sundayCounts.get(b.id) ?? 0;
         if (sunA !== sunB) return sunA - sunB;
 
-        const freeWeekdaysA = weekdays.filter((d) => assignments[a.id]?.[d] === undefined).length;
-        const freeWeekdaysB = weekdays.filter((d) => assignments[b.id]?.[d] === undefined).length;
-        if (freeWeekdaysA !== freeWeekdaysB) return freeWeekdaysB - freeWeekdaysA;
+        const hasFreeA = weekdays.some((d) => assignments[a.id]?.[d] === undefined) ? 0 : 1;
+        const hasFreeB = weekdays.some((d) => assignments[b.id]?.[d] === undefined) ? 0 : 1;
+        if (hasFreeA !== hasFreeB) return hasFreeA - hasFreeB;
 
-        const idxA = ((empIndexMap.get(a.id) ?? 0) + weekSeed) % teamEmployees.length;
-        const idxB = ((empIndexMap.get(b.id) ?? 0) + weekSeed) % teamEmployees.length;
-        return idxA - idxB;
+        const noiseA = deterministicNoise(effectiveSeed, `sun:${a.id}:${sundayDate}`);
+        const noiseB = deterministicNoise(effectiveSeed, `sun:${b.id}:${sundayDate}`);
+        return noiseA - noiseB;
       });
 
       const chosen = candidates[0];
@@ -275,10 +299,12 @@ function scheduleTeamWeek(params: {
 
       const compDay = pickBestCompOffDay({
         employeeId: empId,
+        teamId,
         weekdays,
         assignments,
         state,
         teamEmployees,
+        effectiveSeed,
       });
       if (compDay) {
         assignments[empId][compDay] = { kind: 'COMP_OFF', locked: false };
@@ -302,6 +328,7 @@ function scheduleTeamWeek(params: {
 
   for (let dayIdx = 0; dayIdx < weekdays.length; dayIdx += 1) {
     const date = weekdays[dayIdx];
+    const dow = getDayOfWeek(date);
     const holiday = state.holidays[date];
     const isHolidaySpecial = holiday?.mode === 'special';
 
@@ -313,11 +340,36 @@ function scheduleTeamWeek(params: {
       }
     }
 
-    const applicable = getApplicableShiftsForDate(state, date, true);
+    const dayExplicitCap =
+      isHolidaySpecial && rules.holidayStaffCount !== null
+        ? rules.holidayStaffCount
+        : dow === 6 && !holiday && rules.saturdayStaffCount !== null
+          ? rules.saturdayStaffCount
+          : null;
+
+    if (dayExplicitCap === 0) {
+      if (isHolidaySpecial) {
+        for (const emp of teamEmployees) {
+          if (assignments[emp.id]?.[date] === undefined) {
+            assignments[emp.id][date] = { kind: 'HOLIDAY_OFF', locked: false };
+          }
+        }
+      }
+      continue;
+    }
+
+    const applicable = getApplicableShiftsForDate(state, date, true, teamId);
     if (applicable.length === 0) continue;
 
     const monthKey = getMonthKey(date);
     const savedNightCounts = getSavedNightCounts(monthKey);
+
+    let assignedCountToday = teamEmployees.filter(
+      (e) => assignments[e.id]?.[date]?.kind === 'SHIFT',
+    ).length;
+
+    const hasRemainingDayCap = () =>
+      dayExplicitCap === null || assignedCountToday < dayExplicitCap;
 
     const remainingNeed = new Map<string, number>();
     for (const shift of applicable) {
@@ -333,7 +385,7 @@ function scheduleTeamWeek(params: {
     const nightShifts = applicable.filter((s) => s.isNightShift);
     for (const shift of nightShifts) {
       let need = remainingNeed.get(shift.id) ?? 0;
-      while (need > 0) {
+      while (need > 0 && hasRemainingDayCap()) {
         const candidates = teamEmployees.filter((emp) => {
           if (rules.enforceBeginnerRestrictions && emp.isBeginner) return false;
           if (assignments[emp.id]?.[date] !== undefined) return false;
@@ -396,9 +448,9 @@ function scheduleTeamWeek(params: {
           const shiftsB = countWeekShifts(assignments, b.id, days);
           if (shiftsA !== shiftsB) return shiftsA - shiftsB;
 
-          const tieA = ((empIndexMap.get(a.id) ?? 0) + dayIdx + weekSeed) % teamEmployees.length;
-          const tieB = ((empIndexMap.get(b.id) ?? 0) + dayIdx + weekSeed) % teamEmployees.length;
-          return tieA - tieB;
+          const noiseA = deterministicNoise(effectiveSeed, `night:${a.id}:${date}:${shift.id}`);
+          const noiseB = deterministicNoise(effectiveSeed, `night:${b.id}:${date}:${shift.id}`);
+          return noiseA - noiseB;
         });
 
         const chosen = candidates[0];
@@ -407,96 +459,115 @@ function scheduleTeamWeek(params: {
           shiftId: shift.id,
           locked: false,
         };
+        assignedCountToday += 1;
         need -= 1;
       }
       remainingNeed.set(shift.id, need);
     }
 
-    // Subpasso B2: Demais turnos (round-robin por rodada para preencher metas mínimas)
+    // Subpasso B2: Demais turnos (mais cedo primeiro para preservar folga de interjornada de quem saiu tarde na véspera)
     const regularShifts = applicable
       .filter((s) => !s.isNightShift)
       .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
     let assignedInRound = true;
-    while (assignedInRound) {
+    while (assignedInRound && hasRemainingDayCap()) {
       assignedInRound = false;
       for (const shift of regularShifts) {
-        const need = remainingNeed.get(shift.id) ?? 0;
-        if (need <= 0) continue;
+        if (!hasRemainingDayCap()) break;
+        const initialNeed = remainingNeed.get(shift.id) ?? 0;
+        if (initialNeed <= 0 && dayExplicitCap === null) continue;
 
-        const candidates = teamEmployees.filter((emp) => {
-          if (rules.enforceBeginnerRestrictions && isHolidaySpecial && emp.isBeginner) return false;
-          if (assignments[emp.id]?.[date] !== undefined) return false;
-          return true;
-        });
-        if (candidates.length === 0) continue;
+        const slotsThisPass = dayExplicitCap === null ? initialNeed : 1;
+        for (let slot = 0; slot < slotsThisPass && hasRemainingDayCap(); slot += 1) {
+          const need = remainingNeed.get(shift.id) ?? 0;
+          if (need <= 0 && dayExplicitCap === null) break;
 
-        candidates.sort((a, b) => {
-          if (rules.warnInterjornadaUnder11h) {
-            const interA = wouldViolateInterjornada({
-              employeeId: a.id,
-              date,
-              candidateShift: shift,
-              weekStart,
-              assignments,
-              state,
-              shiftsById,
-            })
-              ? 1
-              : 0;
-            const interB = wouldViolateInterjornada({
-              employeeId: b.id,
-              date,
-              candidateShift: shift,
-              weekStart,
-              assignments,
-              state,
-              shiftsById,
-            })
-              ? 1
-              : 0;
-            if (interA !== interB) return interA - interB;
-          }
+          const candidates = teamEmployees.filter((emp) => {
+            if (rules.enforceBeginnerRestrictions && isHolidaySpecial && emp.isBeginner) return false;
+            if (assignments[emp.id]?.[date] !== undefined) return false;
+            return true;
+          });
+          if (candidates.length === 0) break;
 
-          const shiftsA = countWeekShifts(assignments, a.id, days);
-          const shiftsB = countWeekShifts(assignments, b.id, days);
-          if (shiftsA !== shiftsB) return shiftsA - shiftsB;
-
-          if (rules.enforceNightShiftMonthlyRotation) {
-            const reserveScore = (emp: Employee) => {
-              if (rules.enforceBeginnerRestrictions && emp.isBeginner) return 0;
-              const mNight = getCurrentMonthNightCount({
-                employeeId: emp.id,
-                monthKey,
-                savedNightCounts,
+          candidates.sort((a, b) => {
+            if (rules.warnInterjornadaUnder11h) {
+              const interA = wouldViolateInterjornada({
+                employeeId: a.id,
+                date,
+                candidateShift: shift,
+                weekStart,
                 assignments,
-                days,
+                state,
                 shiftsById,
-              });
-              return mNight === 0 ? 2 : 1;
-            };
-            const resDiff = reserveScore(a) - reserveScore(b);
-            if (resDiff !== 0) return resDiff;
+              })
+                ? 1
+                : 0;
+              const interB = wouldViolateInterjornada({
+                employeeId: b.id,
+                date,
+                candidateShift: shift,
+                weekStart,
+                assignments,
+                state,
+                shiftsById,
+              })
+                ? 1
+                : 0;
+              if (interA !== interB) return interA - interB;
+            }
+
+            const shiftsA = countWeekShifts(assignments, a.id, days);
+            const shiftsB = countWeekShifts(assignments, b.id, days);
+            if (shiftsA !== shiftsB) return shiftsA - shiftsB;
+
+            if (rules.enforceNightShiftMonthlyRotation) {
+              const reserveScore = (emp: Employee) => {
+                if (rules.enforceBeginnerRestrictions && emp.isBeginner) return 0;
+                const mNight = getCurrentMonthNightCount({
+                  employeeId: emp.id,
+                  monthKey,
+                  savedNightCounts,
+                  assignments,
+                  days,
+                  shiftsById,
+                });
+                return mNight === 0 ? 2 : 1;
+              };
+              const resDiff = reserveScore(a) - reserveScore(b);
+              if (resDiff !== 0) return resDiff;
+            }
+
+            const noiseA = deterministicNoise(effectiveSeed, `reg:${a.id}:${date}:${shift.id}`);
+            const noiseB = deterministicNoise(effectiveSeed, `reg:${b.id}:${date}:${shift.id}`);
+            return noiseA - noiseB;
+          });
+
+          const chosen = candidates[0];
+          assignments[chosen.id][date] = {
+            kind: 'SHIFT',
+            shiftId: shift.id,
+            locked: false,
+          };
+          assignedCountToday += 1;
+          if (need > 0) {
+            remainingNeed.set(shift.id, need - 1);
           }
-
-          const tieA = ((empIndexMap.get(a.id) ?? 0) + dayIdx + weekSeed) % teamEmployees.length;
-          const tieB = ((empIndexMap.get(b.id) ?? 0) + dayIdx + weekSeed) % teamEmployees.length;
-          return tieA - tieB;
-        });
-
-        const chosen = candidates[0];
-        assignments[chosen.id][date] = {
-          kind: 'SHIFT',
-          shiftId: shift.id,
-          locked: false,
-        };
-        remainingNeed.set(shift.id, need - 1);
-        assignedInRound = true;
+          assignedInRound = true;
+        }
       }
     }
 
-    // Subpasso B3: Só folga no meio da semana quem trabalhou no domingo (se a regra estiver ativa)
-    if (rules.noMidweekOffWithoutSunday) {
+    if (isHolidaySpecial && dayExplicitCap !== null) {
+      for (const emp of teamEmployees) {
+        if (assignments[emp.id]?.[date] === undefined) {
+          assignments[emp.id][date] = { kind: 'HOLIDAY_OFF', locked: false };
+        }
+      }
+    }
+
+    // Subpasso B3: Só folga no meio da semana quem trabalhou no domingo (se a regra estiver ativa e não houver teto explícito para sábado/feriado)
+    if (rules.noMidweekOffWithoutSunday && dayExplicitCap === null) {
       const remainingEmployees = teamEmployees.filter(
         (emp) => assignments[emp.id]?.[date] === undefined,
       );
@@ -551,7 +622,9 @@ function scheduleTeamWeek(params: {
           const ratioB = countOnShift(b.id) / Math.max(1, b.targetHeadcount);
           if (ratioA !== ratioB) return ratioA - ratioB;
 
-          return a.startTime.localeCompare(b.startTime);
+          const noiseA = deterministicNoise(effectiveSeed, `surplus:${emp.id}:${date}:${a.id}`);
+          const noiseB = deterministicNoise(effectiveSeed, `surplus:${emp.id}:${date}:${b.id}`);
+          return noiseA - noiseB;
         });
 
         assignments[emp.id][date] = {
@@ -577,11 +650,12 @@ export function generateWeekSchedule(params: {
   state: AppState;
   weekStart: string;
   existingWeek?: WeekSchedule;
+  seed?: number;
 }): WeekSchedule {
-  const { state, weekStart, existingWeek } = params;
-  const rules = getScheduleRules(state);
+  const { state, weekStart, existingWeek, seed = 0 } = params;
   const days = getWeekDays(weekStart);
   const weekSeed = getWeekSeed(weekStart);
+  const effectiveSeed = (weekSeed ^ Math.imul(seed, 2654435761)) >>> 0;
 
   const activeTeamIds = new Set(state.teams.filter((t) => t.active).map((t) => t.id));
   const activeEmployees = state.employees.filter(
@@ -641,16 +715,18 @@ export function generateWeekSchedule(params: {
     employeesByTeam.set(emp.teamId, list);
   }
 
-  for (const teamEmployees of employeesByTeam.values()) {
+  for (const [teamId, teamEmployees] of employeesByTeam.entries()) {
+    const teamRules = getScheduleRules(state, teamId);
     scheduleTeamWeek({
       state,
-      rules,
+      teamId,
+      rules: teamRules,
       weekStart,
       teamEmployees,
       assignments,
       shiftsById,
       prevSundayWorkers,
-      weekSeed,
+      effectiveSeed,
     });
   }
 
